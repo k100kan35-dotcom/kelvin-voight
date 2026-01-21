@@ -15,21 +15,51 @@ from tkinter import ttk, Frame, Label, Entry, Button, Text, Scrollbar, messagebo
 from scipy.optimize import differential_evolution
 
 
-# Configure Korean font for matplotlib
+# Configure Korean font for matplotlib and get font for Tkinter
 def setup_korean_font():
     """Setup Korean font for matplotlib to prevent encoding issues"""
     try:
-        korean_fonts = ['NanumGothic', 'Malgun Gothic', 'AppleGothic', 'Noto Sans KR']
+        korean_fonts = ['NanumGothic', 'Malgun Gothic', 'AppleGothic', 'Noto Sans KR', 'Noto Sans CJK KR']
         available_fonts = [f.name for f in fm.fontManager.ttflist]
+
+        # Find first available Korean font
+        selected_font = None
         for font in korean_fonts:
             if font in available_fonts:
+                selected_font = font
                 plt.rcParams['font.family'] = font
                 plt.rcParams['axes.unicode_minus'] = False
-                return
-        plt.rcParams['font.family'] = 'DejaVu Sans'
-        plt.rcParams['axes.unicode_minus'] = False
+                break
+
+        if selected_font is None:
+            plt.rcParams['font.family'] = 'DejaVu Sans'
+            plt.rcParams['axes.unicode_minus'] = False
+            selected_font = 'DejaVu Sans'
+
+        return selected_font
     except:
         plt.rcParams['axes.unicode_minus'] = False
+        return 'TkDefaultFont'
+
+
+def get_korean_font_for_tk():
+    """Get available Korean font for Tkinter widgets"""
+    try:
+        import tkinter.font as tkfont
+        available_tk_fonts = tkfont.families()
+
+        # Try to find Korean fonts in order of preference
+        korean_fonts = ['NanumGothic', 'Malgun Gothic', 'AppleGothic', 'Noto Sans KR',
+                       'Noto Sans CJK KR', 'NanumBarunGothic', 'D2Coding']
+
+        for font in korean_fonts:
+            if font in available_tk_fonts:
+                return font
+
+        # Fallback to system default
+        return 'TkDefaultFont'
+    except:
+        return 'TkDefaultFont'
 
 
 setup_korean_font()
@@ -496,8 +526,9 @@ class ViscoelasticGUI:
 아래 그래프를 참고하세요:
 """
 
-        # Text widget
-        text_widget = Text(guide_frame, wrap=tk.WORD, font=('Malgun Gothic', 10),
+        # Text widget with Korean font support
+        korean_font = get_korean_font_for_tk()
+        text_widget = Text(guide_frame, wrap=tk.WORD, font=(korean_font, 10),
                           bg='#f5f5f5', padx=15, pady=15, height=30)
         text_widget.insert('1.0', guide_text)
         text_widget.config(state=tk.DISABLED)
@@ -637,7 +668,7 @@ class ViscoelasticGUI:
             messagebox.showerror("Error", "Invalid number of elements")
 
     def load_pasted_data(self):
-        """Load data from text area"""
+        """Load data from text area - expects linear scale data (freq, E', E")"""
         try:
             text = self.data_text.get('1.0', tk.END)
             lines = [line.strip() for line in text.split('\n') if line.strip() and not line.strip().startswith('#')]
@@ -654,6 +685,7 @@ class ViscoelasticGUI:
                     E_double_list.append(float(parts[2]))
 
             if len(freq_list) > 0:
+                # Store data in linear scale
                 self.master_freq = np.array(freq_list)
                 self.master_E_prime = np.array(E_prime_list)
                 self.master_E_double = np.array(E_double_list)
@@ -710,7 +742,7 @@ class ViscoelasticGUI:
         self.update_all()
 
     def fit_to_master_curve(self):
-        """Fit model parameters to master curve data"""
+        """Fit model parameters to master curve data (expects linear scale data)"""
         if self.master_freq is None:
             messagebox.showerror("Error", "Please load data first")
             return
@@ -726,40 +758,46 @@ class ViscoelasticGUI:
 
                     model = ViscoelasticModeler(E0, E_i, tau_i)
 
-                    freq = 10**self.master_freq
+                    # Data is in linear scale
+                    freq = self.master_freq
                     omega = 2 * np.pi * freq
 
                     E_prime_pred = np.array([model.storage_modulus(w) for w in omega])
                     E_double_pred = np.array([model.loss_modulus(w) for w in omega])
 
-                    # Avoid log of zero
+                    # Avoid log of zero or negative values
                     E_prime_pred = np.maximum(E_prime_pred, 1e-10)
                     E_double_pred = np.maximum(E_double_pred, 1e-10)
+                    E_prime_data = np.maximum(self.master_E_prime, 1e-10)
+                    E_double_data = np.maximum(self.master_E_double, 1e-10)
 
-                    error = np.sum((np.log10(E_prime_pred) - self.master_E_prime)**2) + \
-                           np.sum((np.log10(E_double_pred) - self.master_E_double)**2)
+                    # Compare in log-log space for better fitting across orders of magnitude
+                    error = np.sum((np.log10(E_prime_pred) - np.log10(E_prime_data))**2) + \
+                           np.sum((np.log10(E_double_pred) - np.log10(E_double_data))**2)
 
                     return error
-                except:
+                except Exception as e:
                     return 1e10
 
-            # Set bounds for parameters - more robust calculation
+            # Set bounds for parameters - data is in linear scale
             try:
-                # Calculate E range from data (data is already in log10 scale)
-                E_prime_data = 10**self.master_E_prime  # Convert to linear scale
-                E_double_data = 10**self.master_E_double
+                # Get reasonable bounds from data (data is already in linear scale)
+                E_all = np.concatenate([self.master_E_prime, self.master_E_double])
+                E_all = E_all[E_all > 0]  # Remove any non-positive values
 
-                # Get reasonable bounds from data
-                E_all = np.concatenate([E_prime_data, E_double_data])
-                E_min = max(np.min(E_all) * 0.01, 1.0)  # At least 1 MPa
-                E_max = min(np.max(E_all) * 100, 1e6)  # At most 1e6 MPa
+                if len(E_all) > 0:
+                    E_min = max(np.min(E_all) * 0.01, 1.0)  # At least 1 MPa
+                    E_max = min(np.max(E_all) * 100, 1e6)  # At most 1e6 MPa
+                else:
+                    raise ValueError("No valid positive data")
 
                 # Ensure bounds are valid
                 if not (np.isfinite(E_min) and np.isfinite(E_max) and E_min < E_max):
                     raise ValueError("Invalid bounds from data")
 
-            except:
+            except Exception as e:
                 # Fallback to safe defaults
+                print(f"Warning: Using default bounds due to: {e}")
                 E_min = 1.0
                 E_max = 1e5
 
@@ -769,9 +807,14 @@ class ViscoelasticGUI:
             # E_i bounds
             for i in range(n_elem):
                 bounds.append((E_min, E_max))
-            # tau_i bounds
+            # tau_i bounds - estimate from frequency range
+            freq_min = np.min(self.master_freq)
+            freq_max = np.max(self.master_freq)
+            tau_min = max(1.0 / (2 * np.pi * freq_max * 100), 1e-10)
+            tau_max = min(1.0 / (2 * np.pi * freq_min * 0.01), 1e6)
+
             for i in range(n_elem):
-                bounds.append((1e-10, 1e6))
+                bounds.append((tau_min, tau_max))
 
             # Verify all bounds are valid
             for b in bounds:
@@ -843,11 +886,15 @@ class ViscoelasticGUI:
         self.plot_ax.plot(freq_log, np.log10(E_prime), 'r-', linewidth=2.5, label="Total Storage modulus E'")
         self.plot_ax.plot(freq_log, np.log10(E_double_prime), 'g-', linewidth=2.5, label='Total Loss modulus E"')
 
-        # Plot master curve data if available
+        # Plot master curve data if available (data is in linear scale, convert to log-log)
         if self.master_freq is not None:
-            self.plot_ax.scatter(self.master_freq, self.master_E_prime,
+            master_freq_log = np.log10(np.maximum(self.master_freq, 1e-10))
+            master_E_prime_log = np.log10(np.maximum(self.master_E_prime, 1e-10))
+            master_E_double_log = np.log10(np.maximum(self.master_E_double, 1e-10))
+
+            self.plot_ax.scatter(master_freq_log, master_E_prime_log,
                                c='darkred', marker='o', s=30, alpha=0.6, label="Master E' data")
-            self.plot_ax.scatter(self.master_freq, self.master_E_double,
+            self.plot_ax.scatter(master_freq_log, master_E_double_log,
                                c='darkgreen', marker='s', s=30, alpha=0.6, label='Master E" data')
 
         self.plot_ax.set_xlabel('log10 f (Hz)', fontsize=12, weight='bold')
