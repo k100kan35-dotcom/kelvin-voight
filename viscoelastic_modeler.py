@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Viscoelastic Rubber Compound Modeler v3.0
-Generalized Maxwell Model for Complex Modulus Calculation
+Viscoelastic Rubber Compound Modeler v3.1
+Generalized Maxwell Model with TTS (Time-Temperature Superposition)
 """
 
 import numpy as np
@@ -16,48 +16,38 @@ from scipy.optimize import differential_evolution
 import threading
 
 
-# Configure Korean font for matplotlib and get font for Tkinter
+# Configure Korean font
 def setup_korean_font():
-    """Setup Korean font for matplotlib to prevent encoding issues"""
+    """Setup Korean font for matplotlib"""
     try:
         korean_fonts = ['NanumGothic', 'Malgun Gothic', 'AppleGothic', 'Noto Sans KR', 'Noto Sans CJK KR']
         available_fonts = [f.name for f in fm.fontManager.ttflist]
 
-        # Find first available Korean font
-        selected_font = None
         for font in korean_fonts:
             if font in available_fonts:
-                selected_font = font
                 plt.rcParams['font.family'] = font
                 plt.rcParams['axes.unicode_minus'] = False
-                break
+                return font
 
-        if selected_font is None:
-            plt.rcParams['font.family'] = 'DejaVu Sans'
-            plt.rcParams['axes.unicode_minus'] = False
-            selected_font = 'DejaVu Sans'
-
-        return selected_font
+        plt.rcParams['font.family'] = 'DejaVu Sans'
+        plt.rcParams['axes.unicode_minus'] = False
+        return 'DejaVu Sans'
     except:
         plt.rcParams['axes.unicode_minus'] = False
         return 'TkDefaultFont'
 
 
 def get_korean_font_for_tk():
-    """Get available Korean font for Tkinter widgets"""
+    """Get Korean font for Tkinter"""
     try:
         import tkinter.font as tkfont
         available_tk_fonts = tkfont.families()
-
-        # Try to find Korean fonts in order of preference
         korean_fonts = ['NanumGothic', 'Malgun Gothic', 'AppleGothic', 'Noto Sans KR',
-                       'Noto Sans CJK KR', 'NanumBarunGothic', 'D2Coding']
+                       'Noto Sans CJK KR', 'NanumBarunGothic']
 
         for font in korean_fonts:
             if font in available_tk_fonts:
                 return font
-
-        # Fallback to system default
         return 'TkDefaultFont'
     except:
         return 'TkDefaultFont'
@@ -66,8 +56,37 @@ def get_korean_font_for_tk():
 setup_korean_font()
 
 
+class WLF_Equation:
+    """WLF (Williams-Landel-Ferry) equation for Time-Temperature Superposition"""
+
+    def __init__(self, C1=17.44, C2=51.6, Tg=-50, Tref=25):
+        """
+        WLF equation: log10(aT) = -C1(T - Tref) / (C2 + T - Tref)
+
+        Args:
+            C1: WLF constant (default 17.44 for many polymers)
+            C2: WLF constant (default 51.6 for many polymers)
+            Tg: Glass transition temperature (°C)
+            Tref: Reference temperature (°C)
+        """
+        self.C1 = C1
+        self.C2 = C2
+        self.Tg = Tg
+        self.Tref = Tref
+
+    def calculate_aT(self, T):
+        """Calculate shift factor aT at temperature T"""
+        log_aT = -self.C1 * (T - self.Tref) / (self.C2 + T - self.Tref)
+        return 10**log_aT
+
+    def shift_frequency(self, freq, T):
+        """Shift frequency from temperature T to Tref"""
+        aT = self.calculate_aT(T)
+        return freq * aT
+
+
 class ViscoelasticModeler:
-    """Generalized Maxwell model for viscoelastic materials."""
+    """Generalized Maxwell model for viscoelastic materials"""
 
     def __init__(self, E0, E_i, tau_i):
         self.E0 = E0
@@ -75,38 +94,34 @@ class ViscoelasticModeler:
         self.tau_i = np.array(tau_i) if len(tau_i) > 0 else np.array([])
 
     def storage_modulus(self, omega):
-        """Calculate storage modulus E'(ω)"""
+        """Calculate E'(ω)"""
         E_prime = self.E0
         for E, tau in zip(self.E_i, self.tau_i):
             E_prime += E * (omega * tau)**2 / (1 + (omega * tau)**2)
         return E_prime
 
     def loss_modulus(self, omega):
-        """Calculate loss modulus E"(ω)"""
-        E_double_prime = 0
+        """Calculate E"(ω)"""
+        E_double = 0
         for E, tau in zip(self.E_i, self.tau_i):
-            E_double_prime += E * omega * tau / (1 + (omega * tau)**2)
-        return E_double_prime
+            E_double += E * omega * tau / (1 + (omega * tau)**2)
+        return E_double
 
     def tan_delta(self, omega):
         """Calculate tan δ = E"/E'"""
         E_prime = self.storage_modulus(omega)
         E_double = self.loss_modulus(omega)
-        return E_double / (E_prime + 1e-10)  # Avoid division by zero
+        return E_double / (E_prime + 1e-10)
 
     def element_contribution(self, omega, E_i, tau_i):
-        """Calculate individual element contribution to E' and E\""""
+        """Calculate individual element contribution"""
         E_prime_i = E_i * (omega * tau_i)**2 / (1 + (omega * tau_i)**2)
         E_double_i = E_i * omega * tau_i / (1 + (omega * tau_i)**2)
         return E_prime_i, E_double_i
 
-    def complex_modulus(self, omega):
-        """Calculate complex modulus E*(ω) = E'(ω) + i·E"(ω)"""
-        return self.storage_modulus(omega), self.loss_modulus(omega)
-
 
 class MaxwellDiagramCanvas:
-    """Canvas for drawing Generalized Maxwell model diagram"""
+    """Draw Generalized Maxwell model diagram"""
 
     def __init__(self, fig, ax, n_elements):
         self.fig = fig
@@ -114,67 +129,49 @@ class MaxwellDiagramCanvas:
         self.n_elements = n_elements
 
     def draw_spring(self, x, y, height, width=0.3, color='black'):
-        """Draw a spring symbol"""
+        """Draw spring symbol"""
         n_coils = 10
         coil_y = np.linspace(y, y + height, n_coils * 2 + 1)
         coil_x = [x] + [x + (-1)**i * width/2 for i in range(1, len(coil_y)-1)] + [x]
         self.ax.plot(coil_x, coil_y, color=color, linewidth=2.5)
 
     def draw_dashpot(self, x, y, height, width=0.4, color='black'):
-        """Draw a dashpot (damper) symbol"""
-        # Outer cylinder (rectangular)
+        """Draw dashpot symbol"""
         cylinder_h = height * 0.55
         cylinder_y = y + height * 0.1
         self.ax.add_patch(Rectangle((x - width/2, cylinder_y), width, cylinder_h,
                                    facecolor='white', edgecolor=color, linewidth=2))
 
-        # Inner piston (smaller rectangle, filled)
         piston_h = cylinder_h * 0.4
         piston_y = cylinder_y + cylinder_h * 0.3
         piston_w = width * 0.6
         self.ax.add_patch(Rectangle((x - piston_w/2, piston_y), piston_w, piston_h,
                                    facecolor='gray', edgecolor=color, linewidth=2))
 
-        # Rod extending from bottom
-        rod_bottom_y = y
-        self.ax.plot([x, x], [rod_bottom_y, cylinder_y], color=color, linewidth=2.5)
+        self.ax.plot([x, x], [y, cylinder_y], color=color, linewidth=2.5)
+        self.ax.plot([x, x], [cylinder_y + cylinder_h, y + height], color=color, linewidth=2.5)
 
-        # Rod extending from top
-        rod_top_y = cylinder_y + cylinder_h
-        self.ax.plot([x, x], [rod_top_y, y + height], color=color, linewidth=2.5)
-
-    def draw_maxwell_element(self, x, y_base, y_top, show_label=True, idx=None):
-        """Draw a Maxwell element (spring and dashpot in series)"""
+    def draw_maxwell_element(self, x, y_base, y_top, idx=None):
+        """Draw Maxwell element"""
         total_height = y_top - y_base
         spring_height = total_height * 0.45
         dashpot_height = total_height * 0.45
         gap = total_height * 0.1
 
-        # Connection from bottom
         mid_y1 = y_base + spring_height
         self.ax.plot([x, x], [y_base, y_base + 0.05], 'k-', linewidth=2.5)
-
-        # Spring (bottom part)
         self.draw_spring(x, y_base + 0.05, spring_height - 0.05, width=0.25)
-
-        # Connection between spring and dashpot
         self.ax.plot([x, x], [mid_y1, mid_y1 + gap], 'k-', linewidth=2.5)
-
-        # Dashpot (top part)
         self.draw_dashpot(x, mid_y1 + gap, dashpot_height, width=0.35)
-
-        # Connection to top
         self.ax.plot([x, x], [y_top - 0.05, y_top], 'k-', linewidth=2.5)
 
-        # Label
-        if show_label and idx is not None:
+        if idx is not None:
             self.ax.text(x, y_base - 0.4, f'τ{idx}', ha='center', fontsize=11, weight='bold')
 
     def draw_model(self):
-        """Draw the complete Generalized Maxwell model"""
+        """Draw complete model"""
         self.ax.clear()
 
-        # Calculate dimensions
         n_show = min(self.n_elements, 20)
         spacing = 1.0
         total_width = max(8, n_show * spacing + 2)
@@ -184,56 +181,46 @@ class MaxwellDiagramCanvas:
         self.ax.axis('off')
         self.ax.set_aspect('equal')
 
-        y_base = 0.5
-        y_top = 4.0
-        element_height = y_top - y_base
+        y_base, y_top = 0.5, 4.0
 
-        # Draw top and bottom rigid bars
-        bar_start = -0.5
-        bar_end = total_width - 0.5
+        bar_start, bar_end = -0.5, total_width - 0.5
         self.ax.plot([bar_start, bar_end], [y_top, y_top], 'k-', linewidth=4)
         self.ax.plot([bar_start, bar_end], [y_base, y_base], 'k-', linewidth=4)
 
-        # Add fixed support symbols at ends
         for x_pos in [bar_start, bar_end]:
             self.ax.plot([x_pos, x_pos], [y_top, y_top + 0.3], 'k-', linewidth=4)
             self.ax.scatter([x_pos], [y_top + 0.3], s=100, c='black', marker='s')
 
-        # Draw E0 spring (leftmost)
         x_e0 = 0.5
-        self.draw_spring(x_e0, y_base + 0.1, element_height - 0.2, width=0.35, color='red')
+        self.draw_spring(x_e0, y_base + 0.1, y_top - y_base - 0.2, width=0.35, color='red')
         self.ax.text(x_e0, y_base - 0.4, 'E₀', ha='center', fontsize=13, weight='bold', color='red')
 
-        # Draw Maxwell elements
         for i in range(n_show):
             x_elem = 2.0 + i * spacing
-            self.draw_maxwell_element(x_elem, y_base, y_top, show_label=True, idx=i+1)
+            self.draw_maxwell_element(x_elem, y_base, y_top, idx=i+1)
 
-        # Add "..." if more than 20 elements
         if self.n_elements > 20:
             x_dots = 2.0 + 20 * spacing
             self.ax.text(x_dots, (y_base + y_top)/2, '...', ha='center', fontsize=24, weight='bold')
             self.ax.text(x_dots, y_base - 0.4, f'({self.n_elements} total)', ha='center', fontsize=9)
 
-        # Add title
         title_y = y_top + 0.7
         self.ax.text(total_width/2, title_y, 'Generalized Maxwell Model',
-                    ha='center', fontsize=15, weight='bold')
+                    ha='center', fontsize=14, weight='bold')
 
 
 class ViscoelasticGUI:
     def __init__(self, master):
         self.master = master
-        master.title("Viscoelastic Rubber Compound Modeler v3.0 (Generalized Maxwell Model)")
-        master.geometry("1700x950")
+        master.title("Viscoelastic Modeler v3.1 - TTS & Auto-Optimization")
+        master.geometry("1600x900")
 
-        # Default parameters
+        # Parameters
         self.n_elements = 4
         self.max_elements = 20
         self.E0_default = 10.0
         self.E_i_default = [1000.0, 5000.0, 10000.0, 15000.0]
         self.tau_i_default = [1e-6, 1e-4, 1e-2, 1.0]
-
         self.freq_min = -10
         self.freq_max = 10
 
@@ -241,462 +228,398 @@ class ViscoelasticGUI:
         self.master_freq = None
         self.master_E_prime = None
         self.master_E_double = None
+        self.master_temperature = 25  # Default measurement temperature
 
-        # Tg parameter
-        self.Tg_freq = None  # Frequency at Tg (tan δ peak)
+        # WLF parameters
+        self.wlf = WLF_Equation(C1=17.44, C2=51.6, Tg=-50, Tref=25)
 
         # Element management
         self.element_frames = []
         self.E_entries = []
         self.tau_entries = []
 
-        # Fitting progress tracking
+        # Fitting control
         self.fitting_history = []
         self.fitting_in_progress = False
+        self.stop_fitting = False
 
-        # Create GUI layout
         self.create_widgets()
         self.update_all()
 
     def _on_mousewheel(self, event, canvas):
-        """Enable mouse wheel scrolling"""
+        """Mouse wheel scrolling"""
         canvas.yview_scroll(int(-1*(event.delta/120)), "units")
 
     def create_widgets(self):
         # Main container
         main_frame = Frame(self.master)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # Left panel - Parameters
-        left_panel = Frame(main_frame, width=400, relief=tk.RIDGE, borderwidth=2)
-        left_panel.pack(side=tk.LEFT, fill=tk.BOTH, padx=(0, 10))
+        # Left panel - Parameters (wider)
+        left_panel = Frame(main_frame, width=550, relief=tk.RIDGE, borderwidth=2)
+        left_panel.pack(side=tk.LEFT, fill=tk.BOTH, padx=(0, 5))
+        left_panel.pack_propagate(False)  # Fixed width
 
         # Title
-        title_label = Label(left_panel, text="Model Parameters", font=('Arial', 14, 'bold'))
-        title_label.pack(pady=10)
+        Label(left_panel, text="모델 파라미터", font=('Arial', 13, 'bold')).pack(pady=8)
 
-        # Create notebook for tabs
+        # Notebook
         self.param_notebook = ttk.Notebook(left_panel)
-        self.param_notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.param_notebook.pack(fill=tk.BOTH, expand=True, padx=3, pady=3)
 
-        # Tab 1: Parameters
+        # Tabs
         params_tab = Frame(self.param_notebook)
-        self.param_notebook.add(params_tab, text="Parameters")
-
-        # Tab 2: Data Input
         data_tab = Frame(self.param_notebook)
-        self.param_notebook.add(data_tab, text="Paste Data")
-
-        # Tab 3: Fitting Progress
+        tts_tab = Frame(self.param_notebook)
         fitting_tab = Frame(self.param_notebook)
-        self.param_notebook.add(fitting_tab, text="Fitting Progress")
-
-        # Tab 4: Physics Guide
         guide_tab = Frame(self.param_notebook)
-        self.param_notebook.add(guide_tab, text="Physics Guide")
 
-        # ===== PARAMETERS TAB =====
+        self.param_notebook.add(params_tab, text="Parameters")
+        self.param_notebook.add(data_tab, text="Data")
+        self.param_notebook.add(tts_tab, text="TTS")
+        self.param_notebook.add(fitting_tab, text="Fitting")
+        self.param_notebook.add(guide_tab, text="Guide")
+
         self.create_parameters_tab(params_tab)
-
-        # ===== DATA INPUT TAB =====
         self.create_data_tab(data_tab)
-
-        # ===== FITTING PROGRESS TAB =====
+        self.create_tts_tab(tts_tab)
         self.create_fitting_tab(fitting_tab)
-
-        # ===== PHYSICS GUIDE TAB =====
         self.create_guide_tab(guide_tab)
 
-        # Right panel - Plots (shared)
+        # Right panel - Plots (narrower)
         right_panel = Frame(main_frame)
         right_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # Top: Maxwell diagram
-        diagram_frame = Frame(right_panel, relief=tk.RIDGE, borderwidth=2)
-        diagram_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
+        # Maxwell diagram (smaller)
+        diagram_frame = Frame(right_panel, relief=tk.RIDGE, borderwidth=2, height=250)
+        diagram_frame.pack(fill=tk.X, pady=(0, 5))
+        diagram_frame.pack_propagate(False)
 
-        self.diagram_fig = Figure(figsize=(12, 4), dpi=100)
+        self.diagram_fig = Figure(figsize=(10, 2.5), dpi=100)
         self.diagram_ax = self.diagram_fig.add_subplot(111)
         self.diagram_canvas = FigureCanvasTkAgg(self.diagram_fig, master=diagram_frame)
         self.diagram_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
-        # Bottom: Modulus plot (shared across all tabs)
+        # Modulus plot
         plot_frame = Frame(right_panel, relief=tk.RIDGE, borderwidth=2)
         plot_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.plot_fig = Figure(figsize=(12, 5), dpi=100)
+        self.plot_fig = Figure(figsize=(10, 6), dpi=100)
         self.plot_ax = self.plot_fig.add_subplot(111)
         self.plot_canvas = FigureCanvasTkAgg(self.plot_fig, master=plot_frame)
         self.plot_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
     def create_parameters_tab(self, parent):
-        """Create parameters tab with scrollable content"""
-        # Scrollable frame
-        canvas = tk.Canvas(parent)
+        """Parameters tab with better layout"""
+        # Main canvas with scrollbar
+        canvas = tk.Canvas(parent, highlightthickness=0)
         scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
-        self.scrollable_frame = Frame(canvas)
+        scroll_frame = Frame(canvas)
 
-        self.scrollable_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scroll_frame, anchor="nw", width=540)
         canvas.configure(yscrollcommand=scrollbar.set)
 
-        # Bind mouse wheel to canvas
-        canvas.bind_all("<MouseWheel>", lambda event: self._on_mousewheel(event, canvas))
+        # Enable mouse wheel
+        def _on_enter(event):
+            canvas.bind_all("<MouseWheel>", lambda e: self._on_mousewheel(e, canvas))
+        def _on_leave(event):
+            canvas.unbind_all("<MouseWheel>")
 
-        # E0 parameter
-        Label(self.scrollable_frame, text="E₀ (MPa):", font=('Arial', 11, 'bold')).pack(pady=(10, 5))
-        self.E0_entry = Entry(self.scrollable_frame, width=20)
+        canvas.bind("<Enter>", _on_enter)
+        canvas.bind("<Leave>", _on_leave)
+
+        # Compact layout
+        # E0
+        frame1 = Frame(scroll_frame, relief=tk.GROOVE, bd=1, bg='#f8f8f8')
+        frame1.pack(fill=tk.X, padx=5, pady=3)
+        Label(frame1, text="E₀ (MPa):", font=('Arial', 10, 'bold'), bg='#f8f8f8').pack(side=tk.LEFT, padx=5)
+        self.E0_entry = Entry(frame1, width=15)
         self.E0_entry.insert(0, str(self.E0_default))
-        self.E0_entry.pack()
+        self.E0_entry.pack(side=tk.LEFT, padx=5, pady=3)
 
         # Frequency range
-        Label(self.scrollable_frame, text="Frequency Range (log₁₀ Hz):", font=('Arial', 11, 'bold')).pack(pady=(20, 5))
-        freq_frame = Frame(self.scrollable_frame)
-        freq_frame.pack()
-        Label(freq_frame, text="Min:").grid(row=0, column=0, padx=5)
-        self.freq_min_entry = Entry(freq_frame, width=10)
+        frame2 = Frame(scroll_frame, relief=tk.GROOVE, bd=1, bg='#f8f8f8')
+        frame2.pack(fill=tk.X, padx=5, pady=3)
+        Label(frame2, text="주파수 범위 (log₁₀ Hz):", font=('Arial', 10, 'bold'), bg='#f8f8f8').pack(side=tk.LEFT, padx=5)
+        Label(frame2, text="Min:", bg='#f8f8f8').pack(side=tk.LEFT, padx=2)
+        self.freq_min_entry = Entry(frame2, width=6)
         self.freq_min_entry.insert(0, str(self.freq_min))
-        self.freq_min_entry.grid(row=0, column=1, padx=5)
-        Label(freq_frame, text="Max:").grid(row=0, column=2, padx=5)
-        self.freq_max_entry = Entry(freq_frame, width=10)
+        self.freq_min_entry.pack(side=tk.LEFT, padx=2)
+        Label(frame2, text="Max:", bg='#f8f8f8').pack(side=tk.LEFT, padx=2)
+        self.freq_max_entry = Entry(frame2, width=6)
         self.freq_max_entry.insert(0, str(self.freq_max))
-        self.freq_max_entry.grid(row=0, column=3, padx=5)
+        self.freq_max_entry.pack(side=tk.LEFT, padx=2, pady=3)
 
-        # Tg parameter
-        Label(self.scrollable_frame, text="Tg (Glass Transition):", font=('Arial', 11, 'bold')).pack(pady=(20, 5))
-        tg_frame = Frame(self.scrollable_frame)
-        tg_frame.pack()
-        Label(tg_frame, text="log₁₀ f @ Tg (Hz):").grid(row=0, column=0, padx=5)
-        self.tg_freq_entry = Entry(tg_frame, width=10)
-        self.tg_freq_entry.insert(0, "0.0")
-        self.tg_freq_entry.grid(row=0, column=1, padx=5)
-        Button(tg_frame, text="Auto-adjust τ", command=self.adjust_tau_for_tg,
-               bg='#FF9800', fg='white', font=('Arial', 9, 'bold')).grid(row=0, column=2, padx=5)
-
-        # Number of elements control
-        Label(self.scrollable_frame, text="Number of Maxwell Elements:", font=('Arial', 11, 'bold')).pack(pady=(20, 5))
-        elem_control_frame = Frame(self.scrollable_frame)
-        elem_control_frame.pack()
+        # Maxwell elements count
+        frame3 = Frame(scroll_frame, relief=tk.GROOVE, bd=1, bg='#e8f4f8')
+        frame3.pack(fill=tk.X, padx=5, pady=3)
+        Label(frame3, text="Maxwell 요소 개수:", font=('Arial', 10, 'bold'), bg='#e8f4f8').pack(side=tk.LEFT, padx=5)
 
         self.n_elem_var = tk.StringVar(value=str(self.n_elements))
-        elem_spinbox = ttk.Spinbox(elem_control_frame, from_=1, to=self.max_elements,
-                                   textvariable=self.n_elem_var, width=10)
-        elem_spinbox.pack(side=tk.LEFT, padx=5)
+        elem_spinbox = ttk.Spinbox(frame3, from_=1, to=self.max_elements,
+                                   textvariable=self.n_elem_var, width=8)
+        elem_spinbox.pack(side=tk.LEFT, padx=3)
 
-        Button(elem_control_frame, text="Apply", command=self.update_element_count,
-               bg='#2196F3', fg='white', font=('Arial', 9, 'bold')).pack(side=tk.LEFT, padx=5)
+        Button(frame3, text="적용", command=self.update_element_count,
+               bg='#2196F3', fg='white', font=('Arial', 8, 'bold'), width=6).pack(side=tk.LEFT, padx=3, pady=3)
 
-        # Maxwell elements container (2 columns)
-        Label(self.scrollable_frame, text="Maxwell Elements:", font=('Arial', 11, 'bold')).pack(pady=(20, 10))
+        Button(frame3, text="자동 선택", command=self.auto_select_elements,
+               bg='#FF9800', fg='white', font=('Arial', 8, 'bold'), width=8).pack(side=tk.LEFT, padx=3, pady=3)
 
-        # Container frame that will be recreated
-        self.elements_outer_container = Frame(self.scrollable_frame)
+        # Maxwell elements
+        Label(scroll_frame, text="Maxwell 요소:", font=('Arial', 10, 'bold')).pack(pady=(8, 3))
+
+        self.elements_outer_container = Frame(scroll_frame)
         self.elements_outer_container.pack(fill=tk.X, padx=5)
-
-        # Create initial elements
         self.create_element_entries()
 
-        # Show options
-        options_frame = Frame(self.scrollable_frame)
-        options_frame.pack(pady=10)
+        # Options
+        opt_frame = Frame(scroll_frame)
+        opt_frame.pack(pady=5)
 
         self.show_contributions_var = tk.BooleanVar(value=False)
-        contrib_check = tk.Checkbutton(options_frame, text="Show element contributions",
-                                      variable=self.show_contributions_var, font=('Arial', 9))
-        contrib_check.pack(side=tk.LEFT, padx=5)
+        tk.Checkbutton(opt_frame, text="요소별 기여도", variable=self.show_contributions_var,
+                      font=('Arial', 8)).pack(side=tk.LEFT, padx=3)
 
         self.show_tan_delta_var = tk.BooleanVar(value=True)
-        tan_delta_check = tk.Checkbutton(options_frame, text="Show tan δ",
-                                        variable=self.show_tan_delta_var, font=('Arial', 9))
-        tan_delta_check.pack(side=tk.LEFT, padx=5)
+        tk.Checkbutton(opt_frame, text="tan δ 표시", variable=self.show_tan_delta_var,
+                      font=('Arial', 8)).pack(side=tk.LEFT, padx=3)
 
         # Control buttons
-        Button(self.scrollable_frame, text="Update Plots", command=self.update_all,
-               bg='#4CAF50', fg='white', font=('Arial', 12, 'bold'), pady=10).pack(pady=20, fill=tk.X, padx=20)
+        btn_frame = Frame(scroll_frame)
+        btn_frame.pack(pady=8)
 
-        Button(self.scrollable_frame, text="Reset", command=self.reset_parameters,
-               bg='#ff9800', fg='white', font=('Arial', 10), pady=5).pack(pady=(0, 20), fill=tk.X, padx=20)
+        Button(btn_frame, text="그래프 업데이트", command=self.update_all,
+               bg='#4CAF50', fg='white', font=('Arial', 10, 'bold'), width=15).pack(side=tk.LEFT, padx=3)
+
+        Button(btn_frame, text="초기화", command=self.reset_parameters,
+               bg='#f44336', fg='white', font=('Arial', 10, 'bold'), width=10).pack(side=tk.LEFT, padx=3)
 
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
     def create_data_tab(self, parent):
-        """Create data input tab for pasting data"""
-        Label(parent, text="Paste Viscoelastic Data", font=('Arial', 12, 'bold')).pack(pady=10)
+        """Data input tab"""
+        Label(parent, text="점탄성 데이터 입력", font=('Arial', 11, 'bold')).pack(pady=5)
+        Label(parent, text="형식: frequency(Hz)  E'(MPa)  E\"(MPa)", font=('Arial', 9)).pack()
 
-        Label(parent, text="Format: frequency(Hz) E'(MPa) E\"(MPa) - one row per line",
-              font=('Arial', 9)).pack(pady=5)
-
-        # Text area for pasting data
         text_frame = Frame(parent)
-        text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
-        self.data_text = Text(text_frame, height=20, width=50)
+        self.data_text = Text(text_frame, height=20, width=50, font=('Courier', 9))
         data_scrollbar = Scrollbar(text_frame, command=self.data_text.yview)
         self.data_text.configure(yscrollcommand=data_scrollbar.set)
-
         self.data_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         data_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Sample data
-        sample_text = """# Example data (delete and paste your own):
-# frequency(Hz), E'(MPa), E"(MPa)
-0.001, 10.2, 1.5
-0.01, 15.5, 3.8
-0.1, 25.2, 8.1
-1.0, 45.0, 12.5
+        sample = """# 예시 데이터 (삭제 후 붙여넣기):
+0.001  10.2  1.5
+0.01   15.5  3.8
+0.1    25.2  8.1
+1.0    45.0  12.5
 """
-        self.data_text.insert('1.0', sample_text)
+        self.data_text.insert('1.0', sample)
 
-        # Buttons
         btn_frame = Frame(parent)
-        btn_frame.pack(pady=10)
+        btn_frame.pack(pady=8)
 
-        Button(btn_frame, text="Load Pasted Data", command=self.load_pasted_data,
-               bg='#9C27B0', fg='white', font=('Arial', 11, 'bold'), width=15).pack(side=tk.LEFT, padx=5)
+        Button(btn_frame, text="데이터 로드", command=self.load_pasted_data,
+               bg='#9C27B0', fg='white', font=('Arial', 10, 'bold'), width=12).pack(side=tk.LEFT, padx=3)
 
-        Button(btn_frame, text="Clear Data", command=lambda: self.data_text.delete('1.0', tk.END),
-               bg='#FF5722', fg='white', font=('Arial', 11, 'bold'), width=15).pack(side=tk.LEFT, padx=5)
+        Button(btn_frame, text="지우기", command=lambda: self.data_text.delete('1.0', tk.END),
+               bg='#FF5722', fg='white', font=('Arial', 10, 'bold'), width=10).pack(side=tk.LEFT, padx=3)
 
         Button(btn_frame, text="Fit Model", command=self.start_fitting,
-               bg='#E91E63', fg='white', font=('Arial', 11, 'bold'), width=15).pack(side=tk.LEFT, padx=5)
+               bg='#E91E63', fg='white', font=('Arial', 10, 'bold'), width=12).pack(side=tk.LEFT, padx=3)
+
+        self.stop_button = Button(btn_frame, text="중지", command=self.stop_fitting_process,
+                                  bg='#f44336', fg='white', font=('Arial', 10, 'bold'), width=8, state=tk.DISABLED)
+        self.stop_button.pack(side=tk.LEFT, padx=3)
+
+    def create_tts_tab(self, parent):
+        """Time-Temperature Superposition tab"""
+        Label(parent, text="시간-온도 중첩 (TTS)", font=('Arial', 12, 'bold')).pack(pady=10)
+
+        # WLF parameters
+        wlf_frame = tk.LabelFrame(parent, text="WLF 방정식 파라미터", font=('Arial', 10, 'bold'))
+        wlf_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        # Tg
+        frame1 = Frame(wlf_frame)
+        frame1.pack(fill=tk.X, padx=5, pady=3)
+        Label(frame1, text="Tg (유리전이온도, °C):", width=25, anchor='w').pack(side=tk.LEFT)
+        self.tg_entry = Entry(frame1, width=12)
+        self.tg_entry.insert(0, str(self.wlf.Tg))
+        self.tg_entry.pack(side=tk.LEFT, padx=5)
+
+        # Tref
+        frame2 = Frame(wlf_frame)
+        frame2.pack(fill=tk.X, padx=5, pady=3)
+        Label(frame2, text="Tref (참조온도, °C):", width=25, anchor='w').pack(side=tk.LEFT)
+        self.tref_entry = Entry(frame2, width=12)
+        self.tref_entry.insert(0, str(self.wlf.Tref))
+        self.tref_entry.pack(side=tk.LEFT, padx=5)
+
+        # C1
+        frame3 = Frame(wlf_frame)
+        frame3.pack(fill=tk.X, padx=5, pady=3)
+        Label(frame3, text="C₁ (WLF 상수):", width=25, anchor='w').pack(side=tk.LEFT)
+        self.c1_entry = Entry(frame3, width=12)
+        self.c1_entry.insert(0, str(self.wlf.C1))
+        self.c1_entry.pack(side=tk.LEFT, padx=5)
+
+        # C2
+        frame4 = Frame(wlf_frame)
+        frame4.pack(fill=tk.X, padx=5, pady=3)
+        Label(frame4, text="C₂ (WLF 상수):", width=25, anchor='w').pack(side=tk.LEFT)
+        self.c2_entry = Entry(frame4, width=12)
+        self.c2_entry.insert(0, str(self.wlf.C2))
+        self.c2_entry.pack(side=tk.LEFT, padx=5)
+
+        Button(wlf_frame, text="WLF 파라미터 업데이트", command=self.update_wlf_parameters,
+               bg='#2196F3', fg='white', font=('Arial', 9, 'bold')).pack(pady=5)
+
+        # Temperature shift
+        shift_frame = tk.LabelFrame(parent, text="온도 Shift", font=('Arial', 10, 'bold'))
+        shift_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        frame5 = Frame(shift_frame)
+        frame5.pack(fill=tk.X, padx=5, pady=5)
+        Label(frame5, text="측정 온도 (°C):", width=25, anchor='w').pack(side=tk.LEFT)
+        self.meas_temp_entry = Entry(frame5, width=12)
+        self.meas_temp_entry.insert(0, "25")
+        self.meas_temp_entry.pack(side=tk.LEFT, padx=5)
+
+        frame6 = Frame(shift_frame)
+        frame6.pack(fill=tk.X, padx=5, pady=5)
+        Label(frame6, text="목표 온도 (°C):", width=25, anchor='w').pack(side=tk.LEFT)
+        self.target_temp_entry = Entry(frame6, width=12)
+        self.target_temp_entry.insert(0, "25")
+        self.target_temp_entry.pack(side=tk.LEFT, padx=5)
+
+        Button(shift_frame, text="TTS 적용", command=self.apply_tts,
+               bg='#FF9800', fg='white', font=('Arial', 10, 'bold')).pack(pady=5)
+
+        # Info
+        info_frame = Frame(parent)
+        info_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        info_text = Text(info_frame, height=10, width=50, font=('Courier', 9))
+        info_scroll = Scrollbar(info_frame, command=info_text.yview)
+        info_text.configure(yscrollcommand=info_scroll.set)
+        info_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        info_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        info_msg = """WLF 방정식:
+log₁₀(aT) = -C₁(T - Tref) / (C₂ + T - Tref)
+
+aT: Shift factor (이동 계수)
+T: 온도 (°C)
+Tref: 참조 온도 (°C)
+C₁, C₂: WLF 상수
+
+전형적인 값:
+• 대부분 고분자: C₁≈17.44, C₂≈51.6
+• Tref = Tg + 50°C (보통)
+
+사용법:
+1. Tg와 WLF 상수 입력
+2. 측정 온도와 목표 온도 입력
+3. "TTS 적용" 클릭
+4. 데이터가 자동으로 shift됨
+"""
+        info_text.insert('1.0', info_msg)
+        info_text.config(state=tk.DISABLED)
 
     def create_fitting_tab(self, parent):
-        """Create fitting progress tab"""
-        Label(parent, text="피팅 진행상황 및 결과", font=('Arial', 14, 'bold')).pack(pady=10)
+        """Fitting progress tab"""
+        Label(parent, text="피팅 진행상황", font=('Arial', 12, 'bold')).pack(pady=5)
 
-        # Fitting info text area
         info_frame = Frame(parent)
-        info_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        info_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
-        self.fitting_info_text = Text(info_frame, height=15, width=50, font=('Courier', 9))
+        self.fitting_info_text = Text(info_frame, height=12, width=50, font=('Courier', 8))
         fitting_scrollbar = Scrollbar(info_frame, command=self.fitting_info_text.yview)
         self.fitting_info_text.configure(yscrollcommand=fitting_scrollbar.set)
-
         self.fitting_info_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         fitting_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Initial message
-        initial_msg = """━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  피팅 진행상황
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-데이터를 로드하고 "Fit Model" 버튼을 클릭하면
+        initial_msg = """데이터 로드 후 "Fit Model" 클릭
 피팅 과정이 여기에 표시됩니다.
-
-피팅 정보:
-• 사용된 Maxwell 요소 개수
-• 초기 추정값
-• 최적화 알고리즘 설정
-• 반복 횟수 및 에러 변화
-• 최종 파라미터 값
-• 피팅 품질 평가
-
 """
         self.fitting_info_text.insert('1.0', initial_msg)
         self.fitting_info_text.config(state=tk.DISABLED)
 
-        # Convergence plot
         conv_frame = Frame(parent)
-        conv_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        conv_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
-        self.convergence_fig = Figure(figsize=(8, 4), dpi=80)
+        self.convergence_fig = Figure(figsize=(7, 3.5), dpi=80)
         self.convergence_ax = self.convergence_fig.add_subplot(111)
         self.convergence_canvas = FigureCanvasTkAgg(self.convergence_fig, master=conv_frame)
         self.convergence_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
-        # Initialize empty convergence plot
-        self.convergence_ax.set_xlabel('Iteration', fontsize=10, weight='bold')
-        self.convergence_ax.set_ylabel('Error', fontsize=10, weight='bold')
-        self.convergence_ax.set_title('피팅 수렴 과정', fontsize=12, weight='bold')
+        self.convergence_ax.set_xlabel('Iteration', fontsize=9, weight='bold')
+        self.convergence_ax.set_ylabel('Error', fontsize=9, weight='bold')
+        self.convergence_ax.set_title('수렴 과정', fontsize=10, weight='bold')
         self.convergence_ax.grid(True, alpha=0.3)
         self.convergence_fig.tight_layout()
 
     def create_guide_tab(self, parent):
-        """Create physics guide tab with Korean text and visual examples"""
-        # Scrollable container
-        canvas = tk.Canvas(parent)
+        """Physics guide tab"""
+        canvas = tk.Canvas(parent, highlightthickness=0)
         scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
         guide_frame = Frame(canvas)
 
         guide_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.create_window((0, 0), window=guide_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.bind_all("<MouseWheel>", lambda event: self._on_mousewheel(event, canvas))
 
-        # Korean content
+        def _on_enter(event):
+            canvas.bind_all("<MouseWheel>", lambda e: self._on_mousewheel(e, canvas))
+        def _on_leave(event):
+            canvas.unbind_all("<MouseWheel>")
+
+        canvas.bind("<Enter>", _on_enter)
+        canvas.bind("<Leave>", _on_leave)
+
         guide_text = """
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   물리 가이드: 파라미터 이해하기
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 파라미터 가이드
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-1. E₀ (평형 탄성계수)
-   • 물리적 의미: 장시간 탄성 반응
-   • E'에 미치는 영향: E' 곡선 전체를 위아래로 이동
-   • E"에 미치는 영향: 직접적인 영향 없음
-   • 예시: E₀ 증가 → 전체적으로 높은 강성
+E₀: 평형 탄성계수 (저주파 한계)
+Eᵢ: i번째 Maxwell 요소 탄성계수
+τᵢ: i번째 완화시간 (f_peak ≈ 1/(2πτᵢ))
+tan δ = E"/E' (에너지 소산 비율)
 
-2. Eᵢ (Maxwell 요소 탄성계수)
-   • 물리적 의미: i번째 완화 모드의 강도
-   • E'에 미치는 영향: 플래토 높이 증가
-   • E"에 미치는 영향: 피크 높이 증가
-   • 예시: Eᵢ 증가 → τᵢ에서 더 강한 완화
+자동 요소 선택:
+• AIC/BIC 기준으로 최적 요소 개수 자동 결정
+• 과적합 방지
 
-3. τᵢ (완화시간)
-   • 물리적 의미: i번째 모드의 시간 스케일
-   • E'에 미치는 영향: 전이 위치 이동
-   • E"에 미치는 영향: 피크 위치 이동
-   • 예시: τᵢ 증가 → 더 낮은 주파수에서 전이
-   • 관계식: f(peak) ≈ 1/(2πτᵢ)
+TTS (Time-Temperature Superposition):
+• WLF 방정식으로 온도-주파수 변환
+• 마스터 커브 생성
 
-4. Tg (유리전이온도)
-   • 물리적 의미: 고무-유리 전이가 일어나는 온도/주파수
-   • 측정 방법: tan δ가 최대인 주파수
-   • tau와의 관계: Tg 변경 시 tau 값들이 자동으로 조정됨
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   저장탄성계수 (E')
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-• 의미: 탄성 에너지 저장
-• 거동:
-  - 저주파: E' ≈ E₀ (평형)
-  - 고주파: E' ≈ E₀ + ΣEᵢ (유리상)
-  - 전이: 부드러운 증가
-
-• 조절 방법:
-  ✓ E₀ 증가 → 전체 곡선 위로 이동
-  ✓ Eᵢ 증가 → 더 가파른 전이
-  ✓ τᵢ 감소 → 전이가 오른쪽으로 이동
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   손실탄성계수 (E")
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-• 의미: 에너지 소산
-• 거동:
-  - 저주파: E" ≈ 0 (소산 없음)
-  - 피크 위치: f ≈ 1/(2πτᵢ)
-  - 고주파: E" → 0 (동결)
-
-• 조절 방법:
-  ✓ Eᵢ 증가 → 더 높은 피크
-  ✓ τᵢ 증가 → 피크가 왼쪽으로 이동
-  ✓ 요소 추가 → 다중 피크
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   tan δ (손실계수)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-• 정의: tan δ = E"/E'
-• 물리적 의미: 에너지 소산/저장 비율
-• 중요성:
-  - Tg 결정: tan δ 피크 위치 = Tg
-  - 감쇠 성능: tan δ 클수록 진동 감쇠 우수
-  - 타이어 성능: 구름저항, 습윤노면 접착력
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   피팅 팁
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-1. 대부분의 재료에 3-6개 Maxwell 요소 사용
-2. τᵢ 값을 로그 스케일로 분포시키기
-3. 먼저 시각적으로 파라미터 조정
-4. "Fit Model"로 자동 최적화
-5. E'와 E" 모두 잘 맞는지 확인
-6. Fitting Progress 탭에서 수렴 과정 확인
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   파라미터 변경 효과 예시
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-아래 그래프를 참고하세요:
+사용 순서:
+1. Data 탭에서 데이터 로드
+2. 자동 요소 선택 또는 수동 설정
+3. Fit Model 클릭
+4. TTS 탭에서 온도 shift (선택사항)
 """
 
-        # Text widget with Korean font support
         korean_font = get_korean_font_for_tk()
-        text_widget = Text(guide_frame, wrap=tk.WORD, font=(korean_font, 10),
-                          bg='#f5f5f5', padx=15, pady=15, height=30)
+        text_widget = Text(guide_frame, wrap=tk.WORD, font=(korean_font, 9),
+                          bg='#f5f5f5', padx=10, pady=10, height=30)
         text_widget.insert('1.0', guide_text)
         text_widget.config(state=tk.DISABLED)
-        text_widget.pack(fill=tk.X, padx=10, pady=10)
-
-        # Example plots
-        self.create_example_plots(guide_frame)
+        text_widget.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-    def create_example_plots(self, parent):
-        """Create example plots showing parameter effects"""
-        # Create matplotlib figure
-        example_fig = Figure(figsize=(10, 8), dpi=80)
-
-        # Example 1: E0 effect
-        ax1 = example_fig.add_subplot(221)
-        freq_log = np.linspace(-6, 6, 500)
-        omega = 2 * np.pi * 10**freq_log
-
-        for E0 in [10, 50, 100]:
-            model = ViscoelasticModeler(E0, [1000], [0.01])
-            E_prime = [model.storage_modulus(w) for w in omega]
-            ax1.plot(freq_log, np.log10(E_prime), linewidth=2, label=f'E₀ = {E0} MPa')
-
-        ax1.set_xlabel('log10 f (Hz)', fontsize=10)
-        ax1.set_ylabel("log10 E' (MPa)", fontsize=10)
-        ax1.set_title('E₀ 변화 효과', fontsize=11, weight='bold')
-        ax1.legend(fontsize=9)
-        ax1.grid(True, alpha=0.3)
-
-        # Example 2: Ei effect
-        ax2 = example_fig.add_subplot(222)
-        for Ei in [500, 2000, 5000]:
-            model = ViscoelasticModeler(10, [Ei], [0.01])
-            E_double = [model.loss_modulus(w) for w in omega]
-            ax2.plot(freq_log, np.log10(np.array(E_double) + 1e-10), linewidth=2, label=f'E₁ = {Ei} MPa')
-
-        ax2.set_xlabel('log10 f (Hz)', fontsize=10)
-        ax2.set_ylabel('log10 E" (MPa)', fontsize=10)
-        ax2.set_title('E₁ 변화 효과 (피크 높이)', fontsize=11, weight='bold')
-        ax2.legend(fontsize=9)
-        ax2.grid(True, alpha=0.3)
-
-        # Example 3: tau effect
-        ax3 = example_fig.add_subplot(223)
-        for tau in [1e-3, 1e-2, 1e-1]:
-            model = ViscoelasticModeler(10, [2000], [tau])
-            E_double = [model.loss_modulus(w) for w in omega]
-            ax3.plot(freq_log, np.log10(np.array(E_double) + 1e-10), linewidth=2, label=f'τ₁ = {tau} s')
-
-        ax3.set_xlabel('log10 f (Hz)', fontsize=10)
-        ax3.set_ylabel('log10 E" (MPa)', fontsize=10)
-        ax3.set_title('τ₁ 변화 효과 (피크 위치)', fontsize=11, weight='bold')
-        ax3.legend(fontsize=9)
-        ax3.grid(True, alpha=0.3)
-
-        # Example 4: tan delta
-        ax4 = example_fig.add_subplot(224)
-        for tau in [1e-3, 1e-2, 1e-1]:
-            model = ViscoelasticModeler(10, [2000], [tau])
-            tan_d = [model.tan_delta(w) for w in omega]
-            f_peak = 1.0 / (2 * np.pi * tau)
-            ax4.plot(freq_log, tan_d, linewidth=2, label=f'τ₁={tau}s, Tg@{np.log10(f_peak):.1f}')
-
-        ax4.set_xlabel('log10 f (Hz)', fontsize=10)
-        ax4.set_ylabel('tan δ', fontsize=10)
-        ax4.set_title('tan δ와 Tg 관계', fontsize=11, weight='bold')
-        ax4.legend(fontsize=9)
-        ax4.grid(True, alpha=0.3)
-
-        example_fig.tight_layout()
-
-        # Embed in tkinter
-        example_canvas = FigureCanvasTkAgg(example_fig, master=parent)
-        example_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
     def create_element_entries(self):
-        """Create entry fields for Maxwell elements in 2 columns"""
-        # Completely destroy and recreate the container to avoid shifting
+        """Create element entries with compact layout"""
         for widget in self.elements_outer_container.winfo_children():
             widget.destroy()
 
@@ -704,40 +627,39 @@ class ViscoelasticGUI:
         self.E_entries.clear()
         self.tau_entries.clear()
 
-        # Create container with 2 columns
-        col1_frame = Frame(self.elements_outer_container)
-        col2_frame = Frame(self.elements_outer_container)
-        col1_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
-        col2_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
+        # 2 columns
+        col1 = Frame(self.elements_outer_container)
+        col2 = Frame(self.elements_outer_container)
+        col1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=1)
+        col2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=1)
 
-        # Create elements (1-10 in col1, 11-20 in col2)
         for i in range(self.n_elements):
-            parent = col1_frame if i < 10 else col2_frame
+            parent = col1 if i < 10 else col2
 
-            element_frame = Frame(parent, relief=tk.GROOVE, borderwidth=2, bg='#f0f0f0')
-            element_frame.pack(fill=tk.X, pady=2)
+            elem_frame = Frame(parent, relief=tk.RIDGE, bd=1, bg='#fafafa')
+            elem_frame.pack(fill=tk.X, pady=1)
 
-            Label(element_frame, text=f"Element {i+1}", font=('Arial', 9, 'bold'), bg='#f0f0f0').grid(
-                row=0, column=0, columnspan=2, pady=2)
+            Label(elem_frame, text=f"#{i+1}", font=('Arial', 8, 'bold'), bg='#fafafa', width=3).grid(
+                row=0, column=0, rowspan=2)
 
-            Label(element_frame, text=f"E{i+1}:", bg='#f0f0f0', font=('Arial', 8)).grid(row=1, column=0, sticky='e', padx=3)
-            E_entry = Entry(element_frame, width=12, font=('Arial', 8))
+            Label(elem_frame, text=f"E{i+1}:", bg='#fafafa', font=('Arial', 7)).grid(row=0, column=1, sticky='e')
+            E_entry = Entry(elem_frame, width=11, font=('Arial', 7))
             E_val = self.E_i_default[i] if i < len(self.E_i_default) else 1000.0
-            E_entry.insert(0, str(E_val))
-            E_entry.grid(row=1, column=1, padx=3, pady=1)
+            E_entry.insert(0, f"{E_val:.1f}")
+            E_entry.grid(row=0, column=2, padx=2, pady=1)
             self.E_entries.append(E_entry)
 
-            Label(element_frame, text=f"τ{i+1}:", bg='#f0f0f0', font=('Arial', 8)).grid(row=2, column=0, sticky='e', padx=3)
-            tau_entry = Entry(element_frame, width=12, font=('Arial', 8))
+            Label(elem_frame, text=f"τ{i+1}:", bg='#fafafa', font=('Arial', 7)).grid(row=1, column=1, sticky='e')
+            tau_entry = Entry(elem_frame, width=11, font=('Arial', 7))
             tau_val = self.tau_i_default[i] if i < len(self.tau_i_default) else 1e-3
-            tau_entry.insert(0, str(tau_val))
-            tau_entry.grid(row=2, column=1, padx=3, pady=1)
+            tau_entry.insert(0, f"{tau_val:.2e}")
+            tau_entry.grid(row=1, column=2, padx=2, pady=1)
             self.tau_entries.append(tau_entry)
 
-            self.element_frames.append(element_frame)
+            self.element_frames.append(elem_frame)
 
     def update_element_count(self):
-        """Update the number of Maxwell elements"""
+        """Update element count"""
         try:
             new_n = int(self.n_elem_var.get())
             if 1 <= new_n <= self.max_elements:
@@ -745,19 +667,93 @@ class ViscoelasticGUI:
                 self.create_element_entries()
                 self.update_all()
             else:
-                messagebox.showerror("Error", f"Number of elements must be between 1 and {self.max_elements}")
+                messagebox.showerror("오류", f"요소 개수는 1-{self.max_elements} 사이여야 합니다")
         except ValueError:
-            messagebox.showerror("Error", "Invalid number of elements")
+            messagebox.showerror("오류", "잘못된 숫자입니다")
+
+    def auto_select_elements(self):
+        """Automatically select optimal number of elements using AIC"""
+        if self.master_freq is None:
+            messagebox.showerror("오류", "먼저 데이터를 로드하세요")
+            return
+
+        try:
+            messagebox.showinfo("자동 선택", "최적 요소 개수 탐색 중... (수 초 소요)")
+
+            freq = self.master_freq
+            omega = 2 * np.pi * freq
+
+            best_n = 1
+            best_aic = float('inf')
+            aic_values = []
+
+            for n in range(1, min(10, self.max_elements) + 1):  # Test 1-10 elements
+                try:
+                    # Quick fit
+                    E_all = np.concatenate([self.master_E_prime, self.master_E_double])
+                    E_min = max(np.min(E_all[E_all > 0]) * 0.01, 0.1)
+                    E_max = min(np.max(E_all[E_all > 0]) * 100, 1e7)
+
+                    bounds = [(E_min, E_max/10)] + [(E_min, E_max)] * n
+                    tau_min = 1.0 / (2 * np.pi * np.max(freq) * 1000)
+                    tau_max = 1.0 / (2 * np.pi * np.min(freq) * 0.001)
+                    bounds += [(tau_min, tau_max)] * n
+
+                    def objective(params):
+                        E0 = params[0]
+                        E_i = params[1:n+1]
+                        tau_i = params[n+1:2*n+1]
+                        model = ViscoelasticModeler(E0, E_i, tau_i)
+
+                        E_prime_pred = np.array([model.storage_modulus(w) for w in omega])
+                        E_double_pred = np.array([model.loss_modulus(w) for w in omega])
+
+                        E_prime_pred = np.maximum(E_prime_pred, 1e-10)
+                        E_double_pred = np.maximum(E_double_pred, 1e-10)
+                        E_prime_data = np.maximum(self.master_E_prime, 1e-10)
+                        E_double_data = np.maximum(self.master_E_double, 1e-10)
+
+                        error = np.sum((np.log10(E_prime_pred) - np.log10(E_prime_data))**2) + \
+                               2.0 * np.sum((np.log10(E_double_pred) - np.log10(E_double_data))**2)
+                        return error
+
+                    result = differential_evolution(objective, bounds, maxiter=100, popsize=15,
+                                                   seed=42, workers=1, polish=False)
+
+                    # Calculate AIC
+                    k = 2 * n + 1  # Number of parameters
+                    N = 2 * len(freq)  # Number of data points (E' and E")
+                    RSS = result.fun
+                    AIC = N * np.log(RSS / N) + 2 * k
+                    aic_values.append(AIC)
+
+                    if AIC < best_aic:
+                        best_aic = AIC
+                        best_n = n
+
+                except:
+                    aic_values.append(float('inf'))
+                    continue
+
+            self.n_elem_var.set(str(best_n))
+            self.n_elements = best_n
+            self.create_element_entries()
+            self.update_all()
+
+            messagebox.showinfo("자동 선택 완료",
+                               f"최적 요소 개수: {best_n}\nAIC: {best_aic:.2f}")
+
+        except Exception as e:
+            messagebox.showerror("오류", f"자동 선택 실패: {str(e)}")
 
     def load_pasted_data(self):
-        """Load data from text area - expects linear scale data (freq, E', E")"""
+        """Load pasted data"""
         try:
             text = self.data_text.get('1.0', tk.END)
-            lines = [line.strip() for line in text.split('\n') if line.strip() and not line.strip().startswith('#')]
+            lines = [line.strip() for line in text.split('\n')
+                    if line.strip() and not line.strip().startswith('#')]
 
-            freq_list = []
-            E_prime_list = []
-            E_double_list = []
+            freq_list, E_prime_list, E_double_list = [], [], []
 
             for line in lines:
                 parts = [x.strip() for x in line.replace(',', ' ').split()]
@@ -767,53 +763,59 @@ class ViscoelasticGUI:
                     E_double_list.append(float(parts[2]))
 
             if len(freq_list) > 0:
-                # Store data in linear scale
                 self.master_freq = np.array(freq_list)
                 self.master_E_prime = np.array(E_prime_list)
                 self.master_E_double = np.array(E_double_list)
 
-                messagebox.showinfo("Success", f"Loaded {len(freq_list)} data points")
+                messagebox.showinfo("성공", f"{len(freq_list)}개 데이터 로드됨")
                 self.update_modulus_plot()
             else:
-                messagebox.showerror("Error", "No valid data found")
+                messagebox.showerror("오류", "유효한 데이터 없음")
 
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to parse data: {e}")
+            messagebox.showerror("오류", f"데이터 로드 실패: {e}")
 
-    def adjust_tau_for_tg(self):
-        """Auto-adjust tau values based on Tg frequency"""
+    def update_wlf_parameters(self):
+        """Update WLF parameters"""
         try:
-            tg_freq_log = float(self.tg_freq_entry.get())
-            tg_freq = 10**tg_freq_log
+            self.wlf.Tg = float(self.tg_entry.get())
+            self.wlf.Tref = float(self.tref_entry.get())
+            self.wlf.C1 = float(self.c1_entry.get())
+            self.wlf.C2 = float(self.c2_entry.get())
+            messagebox.showinfo("성공", "WLF 파라미터 업데이트 완료")
+        except ValueError:
+            messagebox.showerror("오류", "잘못된 값입니다")
 
-            # Calculate tau at Tg: f = 1/(2πτ) → τ = 1/(2πf)
-            tau_tg = 1.0 / (2 * np.pi * tg_freq)
+    def apply_tts(self):
+        """Apply TTS to shift data"""
+        if self.master_freq is None:
+            messagebox.showerror("오류", "먼저 데이터를 로드하세요")
+            return
 
-            # Distribute tau values around tau_tg in log scale
-            n = self.n_elements
-            if n == 1:
-                tau_values = [tau_tg]
-            else:
-                # Spread taus logarithmically around tau_tg
-                log_tau_tg = np.log10(tau_tg)
-                spread = 3.0  # ±3 orders of magnitude
-                log_taus = np.linspace(log_tau_tg - spread, log_tau_tg + spread, n)
-                tau_values = 10**log_taus
+        try:
+            meas_temp = float(self.meas_temp_entry.get())
+            target_temp = float(self.target_temp_entry.get())
 
-            # Update tau entries
-            for i, tau_entry in enumerate(self.tau_entries):
-                if i < len(tau_values):
-                    tau_entry.delete(0, tk.END)
-                    tau_entry.insert(0, f"{tau_values[i]:.2e}")
+            # Calculate shift factor
+            aT_meas = self.wlf.calculate_aT(meas_temp)
+            aT_target = self.wlf.calculate_aT(target_temp)
+            aT_total = aT_target / aT_meas
 
-            self.update_all()
-            messagebox.showinfo("Success", f"τ values adjusted for Tg at log10(f) = {tg_freq_log:.2f} Hz")
+            # Shift frequency
+            self.master_freq = self.master_freq * aT_total
+            self.master_temperature = target_temp
+
+            self.update_modulus_plot()
+            messagebox.showinfo("TTS 적용 완료",
+                               f"측정 온도: {meas_temp}°C\n"
+                               f"목표 온도: {target_temp}°C\n"
+                               f"Shift factor: {aT_total:.4e}")
 
         except ValueError:
-            messagebox.showerror("Error", "Invalid Tg frequency value")
+            messagebox.showerror("오류", "잘못된 온도 값입니다")
 
     def get_parameters(self):
-        """Read parameters from GUI entries"""
+        """Get parameters from GUI"""
         try:
             E0 = float(self.E0_entry.get())
             E_i = [float(entry.get()) for entry in self.E_entries]
@@ -822,11 +824,11 @@ class ViscoelasticGUI:
             freq_max = float(self.freq_max_entry.get())
             return E0, E_i, tau_i, freq_min, freq_max
         except ValueError as e:
-            messagebox.showerror("Error", f"Invalid parameter: {e}")
+            messagebox.showerror("오류", f"잘못된 파라미터: {e}")
             return None
 
     def set_parameters(self, E0, E_i, tau_i):
-        """Set parameters to GUI entries"""
+        """Set parameters to GUI"""
         self.E0_entry.delete(0, tk.END)
         self.E0_entry.insert(0, f"{E0:.2f}")
 
@@ -839,7 +841,7 @@ class ViscoelasticGUI:
                 tau_entry.insert(0, f"{tau_i[i]:.2e}")
 
     def reset_parameters(self):
-        """Reset to default values"""
+        """Reset parameters"""
         self.n_elem_var.set(str(4))
         self.n_elements = 4
         self.create_element_entries()
@@ -856,69 +858,55 @@ class ViscoelasticGUI:
         self.update_all()
 
     def start_fitting(self):
-        """Start fitting in a separate thread"""
+        """Start fitting"""
         if self.master_freq is None:
-            messagebox.showerror("Error", "Please load data first")
+            messagebox.showerror("오류", "먼저 데이터를 로드하세요")
             return
 
         if self.fitting_in_progress:
-            messagebox.showwarning("Warning", "Fitting already in progress")
+            messagebox.showwarning("경고", "피팅이 이미 진행 중입니다")
             return
 
-        # Switch to fitting progress tab
-        self.param_notebook.select(2)
+        self.stop_fitting = False
+        self.stop_button.config(state=tk.NORMAL)
+        self.param_notebook.select(3)  # Switch to Fitting tab
 
-        # Start fitting in background thread
         fitting_thread = threading.Thread(target=self.fit_to_master_curve, daemon=True)
         fitting_thread.start()
 
-    def fit_to_master_curve(self):
-        """Fit model parameters to master curve data with improved algorithm"""
-        if self.master_freq is None:
-            messagebox.showerror("Error", "Please load data first")
-            return
+    def stop_fitting_process(self):
+        """Stop fitting"""
+        self.stop_fitting = True
+        self.stop_button.config(state=tk.DISABLED)
+        self.update_fitting_info("\n>>> 사용자가 피팅을 중지했습니다 <<<\n")
 
+    def fit_to_master_curve(self):
+        """Fit model with improved algorithm"""
         try:
             self.fitting_in_progress = True
             self.fitting_history = []
 
-            # Update fitting info
             self.update_fitting_info("피팅 시작...\n")
-
             n_elem = self.n_elements
-            self.update_fitting_info(f"Maxwell 요소 개수: {n_elem}\n")
+            self.update_fitting_info(f"Maxwell 요소: {n_elem}개\n\n")
 
-            # Estimate initial parameters from data
-            self.update_fitting_info("\n초기값 추정 중...\n")
-            E_all = np.concatenate([self.master_E_prime, self.master_E_double])
-            E_all_positive = E_all[E_all > 0]
-
-            if len(E_all_positive) == 0:
-                raise ValueError("No positive modulus values in data")
-
-            E_min_data = np.min(E_all_positive)
-            E_max_data = np.max(E_all_positive)
-            E0_init = E_min_data  # Initial guess for E0
-
-            self.update_fitting_info(f"  E 범위: {E_min_data:.2e} - {E_max_data:.2e} MPa\n")
-            self.update_fitting_info(f"  초기 E0: {E0_init:.2e} MPa\n")
-
-            # Estimate tau from E" peak
             freq = self.master_freq
-            E_double_data = self.master_E_double
-            if len(E_double_data) > 0 and np.max(E_double_data) > 0:
-                peak_idx = np.argmax(E_double_data)
-                peak_freq = freq[peak_idx]
-                tau_peak = 1.0 / (2 * np.pi * peak_freq)
-                self.update_fitting_info(f"  E\" 피크 주파수: {peak_freq:.2e} Hz\n")
-                self.update_fitting_info(f"  추정 tau (피크): {tau_peak:.2e} s\n")
-            else:
-                tau_peak = 1.0
+            omega = 2 * np.pi * freq
 
-            # Callback to track progress
+            # Estimate bounds
+            E_all = np.concatenate([self.master_E_prime, self.master_E_double])
+            E_all_pos = E_all[E_all > 0]
+            E_min = max(np.min(E_all_pos) * 0.001, 0.1)
+            E_max = min(np.max(E_all_pos) * 100, 1e7)
+
+            self.update_fitting_info(f"E 범위: [{E_min:.2e}, {E_max:.2e}] MPa\n")
+
             iteration_count = [0]
 
-            def objective_with_callback(params):
+            def objective(params):
+                if self.stop_fitting:
+                    return 1e20
+
                 try:
                     E0 = params[0]
                     E_i = params[1:n_elem+1]
@@ -926,26 +914,18 @@ class ViscoelasticGUI:
 
                     model = ViscoelasticModeler(E0, E_i, tau_i)
 
-                    # Data is in linear scale
-                    omega = 2 * np.pi * freq
-
                     E_prime_pred = np.array([model.storage_modulus(w) for w in omega])
                     E_double_pred = np.array([model.loss_modulus(w) for w in omega])
 
-                    # Avoid log of zero or negative values
                     E_prime_pred = np.maximum(E_prime_pred, 1e-10)
                     E_double_pred = np.maximum(E_double_pred, 1e-10)
                     E_prime_data = np.maximum(self.master_E_prime, 1e-10)
                     E_double_data = np.maximum(self.master_E_double, 1e-10)
 
-                    # Compare in log-log space for better fitting across orders of magnitude
                     error_prime = np.sum((np.log10(E_prime_pred) - np.log10(E_prime_data))**2)
                     error_double = np.sum((np.log10(E_double_pred) - np.log10(E_double_data))**2)
-
-                    # Weight E" more heavily to capture peak better
                     total_error = error_prime + 2.0 * error_double
 
-                    # Track progress
                     iteration_count[0] += 1
                     if iteration_count[0] % 50 == 0:
                         self.fitting_history.append(total_error)
@@ -954,116 +934,69 @@ class ViscoelasticGUI:
                             f"반복 {iteration_count[0]}: Error = {total_error:.4e}\n"))
 
                     return total_error
-                except Exception as e:
+                except:
                     return 1e10
 
-            # Set bounds for parameters
-            try:
-                E_min = max(E_min_data * 0.001, 0.1)
-                E_max = min(E_max_data * 100, 1e7)
+            bounds = [(E_min, E_max/10)] + [(E_min, E_max)] * n_elem
 
-                # Ensure bounds are valid
-                if not (np.isfinite(E_min) and np.isfinite(E_max) and E_min < E_max):
-                    raise ValueError("Invalid bounds from data")
+            freq_min_val = np.min(freq)
+            freq_max_val = np.max(freq)
+            tau_min = max(1.0 / (2 * np.pi * freq_max_val * 1000), 1e-12)
+            tau_max = min(1.0 / (2 * np.pi * freq_min_val * 0.001), 1e8)
+            bounds += [(tau_min, tau_max)] * n_elem
 
-            except Exception as e:
-                self.update_fitting_info(f"경고: {e}, 기본값 사용\n")
-                E_min = 0.1
-                E_max = 1e6
+            self.update_fitting_info(f"\n최적화 중...\n")
 
-            bounds = []
-            # E0 bounds (narrower range for E0)
-            bounds.append((E_min, E_max / 10))
-            # E_i bounds
-            for i in range(n_elem):
-                bounds.append((E_min, E_max))
-            # tau_i bounds - estimate from frequency range
-            freq_min = np.min(freq)
-            freq_max = np.max(freq)
-            tau_min = max(1.0 / (2 * np.pi * freq_max * 1000), 1e-12)
-            tau_max = min(1.0 / (2 * np.pi * freq_min * 0.001), 1e8)
-
-            for i in range(n_elem):
-                bounds.append((tau_min, tau_max))
-
-            self.update_fitting_info(f"\n최적화 설정:\n")
-            self.update_fitting_info(f"  E 범위: [{E_min:.2e}, {E_max:.2e}] MPa\n")
-            self.update_fitting_info(f"  tau 범위: [{tau_min:.2e}, {tau_max:.2e}] s\n")
-            self.update_fitting_info(f"  Population size: 30\n")
-            self.update_fitting_info(f"  Max iterations: 300\n")
-            self.update_fitting_info(f"\n피팅 진행 중...\n")
-
-            # Verify all bounds are valid
-            for b in bounds:
-                if not (np.isfinite(b[0]) and np.isfinite(b[1]) and b[0] < b[1]):
-                    raise ValueError(f"Invalid bound: {b}")
-
-            # Run optimization with better parameters
             result = differential_evolution(
-                objective_with_callback,
-                bounds,
-                maxiter=300,  # Increased iterations
-                popsize=30,  # Increased population size
-                seed=42,
-                workers=1,
-                atol=1e-10,  # Tighter tolerance
-                tol=1e-8,
-                updating='deferred',  # Better for noisy objectives
-                polish=True  # Final local optimization
+                objective, bounds,
+                maxiter=300, popsize=30,
+                seed=42, workers=1,
+                atol=1e-10, tol=1e-8,
+                updating='deferred', polish=True
             )
 
-            E0_fit = result.x[0]
-            E_i_fit = result.x[1:n_elem+1]
-            tau_i_fit = result.x[n_elem+1:2*n_elem+1]
+            if not self.stop_fitting:
+                E0_fit = result.x[0]
+                E_i_fit = result.x[1:n_elem+1]
+                tau_i_fit = result.x[n_elem+1:2*n_elem+1]
 
-            # Update parameters in GUI
-            self.master.after(0, lambda: self.set_parameters(E0_fit, E_i_fit, tau_i_fit))
+                self.master.after(0, lambda: self.set_parameters(E0_fit, E_i_fit, tau_i_fit))
+                self.master.after(0, self.update_all)
 
-            # Update both diagram and plot
-            self.master.after(0, self.update_all)
+                # Calculate Tg
+                model_fit = ViscoelasticModeler(E0_fit, E_i_fit, tau_i_fit)
+                freq_range = np.logspace(np.log10(freq_min_val), np.log10(freq_max_val), 1000)
+                omega_range = 2 * np.pi * freq_range
+                tan_delta_range = [model_fit.tan_delta(w) for w in omega_range]
+                tg_idx = np.argmax(tan_delta_range)
+                tg_freq = freq_range[tg_idx]
 
-            # Calculate Tg from fitted parameters
-            model_fit = ViscoelasticModeler(E0_fit, E_i_fit, tau_i_fit)
-            freq_range = np.logspace(np.log10(freq_min), np.log10(freq_max), 1000)
-            omega_range = 2 * np.pi * freq_range
-            tan_delta_range = [model_fit.tan_delta(w) for w in omega_range]
-            tg_idx = np.argmax(tan_delta_range)
-            tg_freq_fit = freq_range[tg_idx]
+                result_msg = f"\n{'='*45}\n피팅 완료!\n{'='*45}\n"
+                result_msg += f"최종 에러: {result.fun:.4e}\n"
+                result_msg += f"반복: {iteration_count[0]}\n\n"
+                result_msg += f"E₀ = {E0_fit:.2e} MPa\n"
+                for i in range(n_elem):
+                    result_msg += f"E{i+1}={E_i_fit[i]:.2e}, τ{i+1}={tau_i_fit[i]:.2e}\n"
+                result_msg += f"\nTg: {np.log10(tg_freq):.2f} (log10 Hz)\n"
+                result_msg += f"tan δ(max): {np.max(tan_delta_range):.4f}\n"
+                result_msg += f"{'='*45}\n"
 
-            # Display results
-            result_msg = f"\n{'='*50}\n피팅 완료!\n{'='*50}\n"
-            result_msg += f"최종 에러: {result.fun:.4e}\n"
-            result_msg += f"반복 횟수: {iteration_count[0]}\n\n"
-            result_msg += f"최적화된 파라미터:\n"
-            result_msg += f"  E₀ = {E0_fit:.2e} MPa\n"
-            for i in range(n_elem):
-                result_msg += f"  E{i+1} = {E_i_fit[i]:.2e} MPa, τ{i+1} = {tau_i_fit[i]:.2e} s\n"
-            result_msg += f"\n유리전이 (Tg):\n"
-            result_msg += f"  주파수: {tg_freq_fit:.2e} Hz (log10: {np.log10(tg_freq_fit):.2f})\n"
-            result_msg += f"  tan δ (max): {np.max(tan_delta_range):.4f}\n"
-            result_msg += f"\n{'='*50}\n"
-
-            self.update_fitting_info(result_msg)
-
-            # Update Tg entry
-            self.master.after(0, lambda: self.tg_freq_entry.delete(0, tk.END))
-            self.master.after(0, lambda: self.tg_freq_entry.insert(0, f"{np.log10(tg_freq_fit):.2f}"))
-
-            self.master.after(0, lambda: messagebox.showinfo("Success",
-                f"피팅 완료!\n최종 에러: {result.fun:.2e}\nTg @ {np.log10(tg_freq_fit):.2f} Hz"))
+                self.update_fitting_info(result_msg)
+                self.master.after(0, lambda: messagebox.showinfo("완료",
+                    f"피팅 완료!\nError: {result.fun:.2e}"))
 
         except Exception as e:
             import traceback
-            error_msg = f"피팅 실패: {str(e)}\n\n{traceback.format_exc()}"
-            print(error_msg)
-            self.update_fitting_info(f"\n에러 발생:\n{error_msg}\n")
-            self.master.after(0, lambda: messagebox.showerror("Error", f"Fitting failed: {str(e)}"))
+            error_msg = f"\n오류:\n{str(e)}\n{traceback.format_exc()}\n"
+            self.update_fitting_info(error_msg)
+            self.master.after(0, lambda: messagebox.showerror("오류", str(e)))
 
         finally:
             self.fitting_in_progress = False
+            self.stop_button.config(state=tk.DISABLED)
 
     def update_fitting_info(self, message):
-        """Update fitting info text (thread-safe)"""
+        """Update fitting info (thread-safe)"""
         def _update():
             self.fitting_info_text.config(state=tk.NORMAL)
             self.fitting_info_text.insert(tk.END, message)
@@ -1076,36 +1009,35 @@ class ViscoelasticGUI:
             self.master.after(0, _update)
 
     def update_convergence_plot(self):
-        """Update the convergence plot"""
+        """Update convergence plot"""
         if len(self.fitting_history) < 2:
             return
 
         self.convergence_ax.clear()
         iterations = np.arange(1, len(self.fitting_history) + 1) * 50
         self.convergence_ax.plot(iterations, self.fitting_history, 'b-', linewidth=2)
-        self.convergence_ax.set_xlabel('Iteration', fontsize=10, weight='bold')
-        self.convergence_ax.set_ylabel('Error', fontsize=10, weight='bold')
-        self.convergence_ax.set_title('피팅 수렴 과정', fontsize=12, weight='bold')
+        self.convergence_ax.set_xlabel('Iteration', fontsize=9, weight='bold')
+        self.convergence_ax.set_ylabel('Error', fontsize=9, weight='bold')
+        self.convergence_ax.set_title('수렴 과정', fontsize=10, weight='bold')
         self.convergence_ax.set_yscale('log')
         self.convergence_ax.grid(True, alpha=0.3)
         self.convergence_fig.tight_layout()
         self.convergence_canvas.draw()
 
     def update_maxwell_diagram(self):
-        """Update the Maxwell model diagram"""
+        """Update diagram"""
         diagram = MaxwellDiagramCanvas(self.diagram_fig, self.diagram_ax, self.n_elements)
         diagram.draw_model()
         self.diagram_fig.tight_layout()
         self.diagram_canvas.draw()
 
     def update_modulus_plot(self):
-        """Update the modulus plot with tan delta"""
+        """Update modulus plot"""
         params = self.get_parameters()
         if params is None:
             return
 
         E0, E_i, tau_i, freq_min, freq_max = params
-
         model = ViscoelasticModeler(E0, E_i, tau_i)
 
         freq_log = np.linspace(freq_min, freq_max, 1000)
@@ -1113,69 +1045,63 @@ class ViscoelasticGUI:
         omega = 2 * np.pi * freq
 
         E_prime = np.array([model.storage_modulus(w) for w in omega])
-        E_double_prime = np.array([model.loss_modulus(w) for w in omega])
+        E_double = np.array([model.loss_modulus(w) for w in omega])
         tan_delta = np.array([model.tan_delta(w) for w in omega])
 
         self.plot_ax.clear()
 
-        # Plot individual element contributions if checkbox is checked
-        if hasattr(self, 'show_contributions_var') and self.show_contributions_var.get():
+        # Element contributions
+        if self.show_contributions_var.get():
             colors = plt.cm.tab10(np.linspace(0, 1, len(E_i)))
             for i, (E, tau, color) in enumerate(zip(E_i, tau_i, colors)):
-                E_prime_i = np.array([model.element_contribution(w, E, tau)[0] for w in omega])
-                E_double_i = np.array([model.element_contribution(w, E, tau)[1] for w in omega])
+                E_p_i = np.array([model.element_contribution(w, E, tau)[0] for w in omega])
+                E_d_i = np.array([model.element_contribution(w, E, tau)[1] for w in omega])
+                self.plot_ax.plot(freq_log, np.log10(E_p_i + 1e-10), '--',
+                                color=color, linewidth=1, alpha=0.5)
+                self.plot_ax.plot(freq_log, np.log10(E_d_i + 1e-10), ':',
+                                color=color, linewidth=1, alpha=0.5)
 
-                self.plot_ax.plot(freq_log, np.log10(E_prime_i + 1e-10), '--',
-                                color=color, linewidth=1.5, alpha=0.6, label=f"Element {i+1} E'")
-                self.plot_ax.plot(freq_log, np.log10(E_double_i + 1e-10), ':',
-                                color=color, linewidth=1.5, alpha=0.6, label=f'Element {i+1} E"')
+        # Total moduli
+        self.plot_ax.plot(freq_log, np.log10(E_prime), 'r-', linewidth=2.5, label="E'")
+        self.plot_ax.plot(freq_log, np.log10(E_double), 'g-', linewidth=2.5, label='E"')
 
-        # Plot total moduli
-        self.plot_ax.plot(freq_log, np.log10(E_prime), 'r-', linewidth=2.5, label="Total Storage modulus E'")
-        self.plot_ax.plot(freq_log, np.log10(E_double_prime), 'g-', linewidth=2.5, label='Total Loss modulus E"')
-
-        # Plot tan delta on secondary axis if enabled
-        if hasattr(self, 'show_tan_delta_var') and self.show_tan_delta_var.get():
+        # tan delta
+        if self.show_tan_delta_var.get():
             ax2 = self.plot_ax.twinx()
-            ax2.plot(freq_log, tan_delta, 'b-', linewidth=2.5, alpha=0.7, label='tan δ')
+            ax2.plot(freq_log, tan_delta, 'b-', linewidth=2, alpha=0.7, label='tan δ')
 
-            # Mark Tg (tan delta peak)
             tg_idx = np.argmax(tan_delta)
-            tg_freq_log = freq_log[tg_idx]
-            tg_tan_delta = tan_delta[tg_idx]
-            ax2.plot(tg_freq_log, tg_tan_delta, 'b*', markersize=15, label=f'Tg @ {tg_freq_log:.2f}')
+            ax2.plot(freq_log[tg_idx], tan_delta[tg_idx], 'b*', markersize=12,
+                    label=f'Tg@{freq_log[tg_idx]:.1f}')
 
-            ax2.set_ylabel('tan δ', fontsize=12, weight='bold', color='b')
+            ax2.set_ylabel('tan δ', fontsize=11, weight='bold', color='b')
             ax2.tick_params(axis='y', labelcolor='b')
-            ax2.legend(fontsize=9, loc='upper right')
+            ax2.legend(fontsize=8, loc='upper right')
             ax2.set_ylim(0, max(tan_delta) * 1.2)
 
-        # Plot master curve data if available (data is in linear scale, convert to log-log)
+        # Master data
         if self.master_freq is not None:
-            master_freq_log = np.log10(np.maximum(self.master_freq, 1e-10))
-            master_E_prime_log = np.log10(np.maximum(self.master_E_prime, 1e-10))
-            master_E_double_log = np.log10(np.maximum(self.master_E_double, 1e-10))
+            freq_log_data = np.log10(np.maximum(self.master_freq, 1e-10))
+            E_p_log = np.log10(np.maximum(self.master_E_prime, 1e-10))
+            E_d_log = np.log10(np.maximum(self.master_E_double, 1e-10))
 
-            self.plot_ax.scatter(master_freq_log, master_E_prime_log,
-                               c='darkred', marker='o', s=30, alpha=0.6, label="Master E' data")
-            self.plot_ax.scatter(master_freq_log, master_E_double_log,
-                               c='darkgreen', marker='s', s=30, alpha=0.6, label='Master E" data')
+            self.plot_ax.scatter(freq_log_data, E_p_log, c='darkred', marker='o',
+                               s=25, alpha=0.6, label="Data E'", zorder=10)
+            self.plot_ax.scatter(freq_log_data, E_d_log, c='darkgreen', marker='s',
+                               s=25, alpha=0.6, label='Data E"', zorder=10)
 
-        self.plot_ax.set_xlabel('log10 f (Hz)', fontsize=12, weight='bold')
-        self.plot_ax.set_ylabel('log10 E (MPa)', fontsize=12, weight='bold')
-        self.plot_ax.set_title('Complex Modulus of Viscoelasticity', fontsize=14, weight='bold')
-
-        # Set y-axis limits (modulus doesn't go below 10^-1 = 0.1 MPa)
+        self.plot_ax.set_xlabel('log10 f (Hz)', fontsize=11, weight='bold')
+        self.plot_ax.set_ylabel('log10 E (MPa)', fontsize=11, weight='bold')
+        self.plot_ax.set_title('Complex Modulus', fontsize=12, weight='bold')
         self.plot_ax.set_ylim(-1, None)
-
-        self.plot_ax.legend(fontsize=9, loc='upper left', ncol=2)
+        self.plot_ax.legend(fontsize=8, loc='upper left')
         self.plot_ax.grid(True, alpha=0.3)
 
         self.plot_fig.tight_layout()
         self.plot_canvas.draw()
 
     def update_all(self):
-        """Update both diagram and plot"""
+        """Update all"""
         self.update_maxwell_diagram()
         self.update_modulus_plot()
 
