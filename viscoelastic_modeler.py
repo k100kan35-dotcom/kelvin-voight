@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Viscoelastic Rubber Compound Modeler v2.1
+Viscoelastic Rubber Compound Modeler v2.2
 Generalized Maxwell Model for Complex Modulus Calculation
 """
 
@@ -8,7 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
-from matplotlib.patches import Rectangle, Circle, FancyBboxPatch, Polygon
+from matplotlib.patches import Rectangle
 import matplotlib.font_manager as fm
 import tkinter as tk
 from tkinter import ttk, Frame, Label, Entry, Button, Text, Scrollbar, messagebox
@@ -84,7 +84,7 @@ class MaxwellDiagramCanvas:
         self.ax.plot(coil_x, coil_y, color=color, linewidth=2.5)
 
     def draw_dashpot(self, x, y, height, width=0.4, color='black'):
-        """Draw a dashpot (damper) symbol - like reference image"""
+        """Draw a dashpot (damper) symbol"""
         # Outer cylinder (rectangular)
         cylinder_h = height * 0.55
         cylinder_y = y + height * 0.1
@@ -187,7 +187,7 @@ class MaxwellDiagramCanvas:
 class ViscoelasticGUI:
     def __init__(self, master):
         self.master = master
-        master.title("Viscoelastic Rubber Compound Modeler v2.1 (Generalized Maxwell Model)")
+        master.title("Viscoelastic Rubber Compound Modeler v2.2 (Generalized Maxwell Model)")
         master.geometry("1700x950")
 
         # Default parameters
@@ -392,8 +392,8 @@ class ViscoelasticGUI:
                bg='#E91E63', fg='white', font=('Arial', 11, 'bold'), width=15).pack(side=tk.LEFT, padx=5)
 
     def create_guide_tab(self, parent):
-        """Create physics guide tab"""
-        # Scrollable text area
+        """Create physics guide tab with Korean text and visual examples"""
+        # Scrollable container
         canvas = tk.Canvas(parent)
         scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
         guide_frame = Frame(canvas)
@@ -403,101 +403,183 @@ class ViscoelasticGUI:
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.bind_all("<MouseWheel>", lambda event: self._on_mousewheel(event, canvas))
 
-        # Content
+        # Korean content
         guide_text = """
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   PHYSICS GUIDE: Understanding Parameters
+   물리 가이드: 파라미터 이해하기
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-1. E₀ (Equilibrium Modulus)
-   • Physical meaning: Long-term elastic response
-   • Effect on E': Shifts entire E' curve up/down
-   • Effect on E": No direct effect
-   • Example: ↑E₀ → Higher baseline stiffness
+1. E₀ (평형 탄성계수)
+   • 물리적 의미: 장시간 탄성 반응
+   • E'에 미치는 영향: E' 곡선 전체를 위아래로 이동
+   • E"에 미치는 영향: 직접적인 영향 없음
+   • 예시: E₀ 증가 → 전체적으로 높은 강성
 
-2. Eᵢ (Maxwell Element Modulus)
-   • Physical meaning: Strength of i-th relaxation mode
-   • Effect on E': Increases plateau height
-   • Effect on E": Increases peak height
-   • Example: ↑Eᵢ → Stronger relaxation at τᵢ
+2. Eᵢ (Maxwell 요소 탄성계수)
+   • 물리적 의미: i번째 완화 모드의 강도
+   • E'에 미치는 영향: 플래토 높이 증가
+   • E"에 미치는 영향: 피크 높이 증가
+   • 예시: Eᵢ 증가 → τᵢ에서 더 강한 완화
 
-3. τᵢ (Relaxation Time)
-   • Physical meaning: Time scale of i-th mode
-   • Effect on E': Shifts transition location
-   • Effect on E": Shifts peak location
-   • Example: ↑τᵢ → Transition at lower frequency
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   Storage Modulus (E')
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-• Represents: Elastic energy storage
-• Behavior:
-  - Low freq: E' ≈ E₀ (equilibrium)
-  - High freq: E' ≈ E₀ + ΣEᵢ (glassy)
-  - Transition: Smooth increase
-
-• How to modify:
-  ✓ Increase E₀ → Shift entire curve up
-  ✓ Increase Eᵢ → Steeper transition
-  ✓ Decrease τᵢ → Shift transition right
+3. τᵢ (완화시간)
+   • 물리적 의미: i번째 모드의 시간 스케일
+   • E'에 미치는 영향: 전이 위치 이동
+   • E"에 미치는 영향: 피크 위치 이동
+   • 예시: τᵢ 증가 → 더 낮은 주파수에서 전이
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   Loss Modulus (E")
+   저장탄성계수 (E')
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-• Represents: Energy dissipation
-• Behavior:
-  - Low freq: E" ≈ 0 (no dissipation)
-  - Peak at: f ≈ 1/(2πτᵢ)
-  - High freq: E" → 0 (frozen)
+• 의미: 탄성 에너지 저장
+• 거동:
+  - 저주파: E' ≈ E₀ (평형)
+  - 고주파: E' ≈ E₀ + ΣEᵢ (유리상)
+  - 전이: 부드러운 증가
 
-• How to modify:
-  ✓ Increase Eᵢ → Higher peak
-  ✓ Increase τᵢ → Peak shifts left
-  ✓ Add elements → Multiple peaks
+• 조절 방법:
+  ✓ E₀ 증가 → 전체 곡선 위로 이동
+  ✓ Eᵢ 증가 → 더 가파른 전이
+  ✓ τᵢ 감소 → 전이가 오른쪽으로 이동
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   Practical Examples
+   손실탄성계수 (E")
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Example 1: Soft rubber (low stiffness)
-  E₀ = 1 MPa, E₁ = 10 MPa, τ₁ = 0.01 s
+• 의미: 에너지 소산
+• 거동:
+  - 저주파: E" ≈ 0 (소산 없음)
+  - 피크 위치: f ≈ 1/(2πτᵢ)
+  - 고주파: E" → 0 (동결)
 
-Example 2: Hard rubber (high stiffness)
-  E₀ = 100 MPa, E₁ = 1000 MPa, τ₁ = 0.01 s
+• 조절 방법:
+  ✓ Eᵢ 증가 → 더 높은 피크
+  ✓ τᵢ 증가 → 피크가 왼쪽으로 이동
+  ✓ 요소 추가 → 다중 피크
 
-Example 3: Multiple relaxations
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   실전 예제
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+예제 1: 부드러운 고무 (낮은 강성)
+  E₀ = 1 MPa
+  E₁ = 10 MPa, τ₁ = 0.01 s
+
+예제 2: 단단한 고무 (높은 강성)
+  E₀ = 100 MPa
+  E₁ = 1000 MPa, τ₁ = 0.01 s
+
+예제 3: 다중 완화
   E₀ = 10 MPa
-  E₁ = 100 MPa, τ₁ = 1e-6 s (fast)
-  E₂ = 500 MPa, τ₂ = 1e-3 s (medium)
-  E₃ = 1000 MPa, τ₃ = 1 s (slow)
+  E₁ = 100 MPa, τ₁ = 1e-6 s (빠름)
+  E₂ = 500 MPa, τ₂ = 1e-3 s (중간)
+  E₃ = 1000 MPa, τ₃ = 1 s (느림)
 
-Example 4: Broadening loss peak
-  Add more elements with different τᵢ
+예제 4: 넓은 손실 피크
+  다양한 τᵢ값으로 요소 추가
   τ₁ = 1e-4, τ₂ = 1e-3, τ₃ = 1e-2, τ₄ = 1e-1
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   Tips for Good Fitting
+   피팅 팁
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-1. Use 3-6 Maxwell elements for most materials
-2. Distribute τᵢ values logarithmically
-3. Start with visual parameter adjustment
-4. Use "Fit Model" for fine-tuning
-5. Check if E' and E" both fit well
+1. 대부분의 재료에 3-6개 Maxwell 요소 사용
+2. τᵢ 값을 로그 스케일로 분포시키기
+3. 먼저 시각적으로 파라미터 조정
+4. "Fit Model"로 미세 조정
+5. E'와 E" 모두 잘 맞는지 확인
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   파라미터 변경 효과 예시
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+아래 그래프를 참고하세요:
 """
 
-        text_widget = Text(guide_frame, wrap=tk.WORD, font=('Courier', 10),
-                          bg='#f5f5f5', padx=15, pady=15)
+        # Text widget
+        text_widget = Text(guide_frame, wrap=tk.WORD, font=('Malgun Gothic', 10),
+                          bg='#f5f5f5', padx=15, pady=15, height=30)
         text_widget.insert('1.0', guide_text)
         text_widget.config(state=tk.DISABLED)
-        text_widget.pack(fill=tk.BOTH, expand=True)
+        text_widget.pack(fill=tk.X, padx=10, pady=10)
+
+        # Example plots
+        self.create_example_plots(guide_frame)
 
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
+
+    def create_example_plots(self, parent):
+        """Create example plots showing parameter effects"""
+        # Create matplotlib figure
+        example_fig = Figure(figsize=(10, 8), dpi=80)
+
+        # Example 1: E0 effect
+        ax1 = example_fig.add_subplot(221)
+        freq_log = np.linspace(-6, 6, 500)
+        omega = 2 * np.pi * 10**freq_log
+
+        for E0 in [10, 50, 100]:
+            model = ViscoelasticModeler(E0, [1000], [0.01])
+            E_prime = [model.storage_modulus(w) for w in omega]
+            ax1.plot(freq_log, np.log10(E_prime), linewidth=2, label=f'E₀ = {E0} MPa')
+
+        ax1.set_xlabel('log10 f (Hz)', fontsize=10)
+        ax1.set_ylabel("log10 E' (MPa)", fontsize=10)
+        ax1.set_title('E₀ 변화 효과', fontsize=11, weight='bold')
+        ax1.legend(fontsize=9)
+        ax1.grid(True, alpha=0.3)
+
+        # Example 2: Ei effect
+        ax2 = example_fig.add_subplot(222)
+        for Ei in [500, 2000, 5000]:
+            model = ViscoelasticModeler(10, [Ei], [0.01])
+            E_double = [model.loss_modulus(w) for w in omega]
+            ax2.plot(freq_log, np.log10(np.array(E_double) + 1e-10), linewidth=2, label=f'E₁ = {Ei} MPa')
+
+        ax2.set_xlabel('log10 f (Hz)', fontsize=10)
+        ax2.set_ylabel('log10 E" (MPa)', fontsize=10)
+        ax2.set_title('E₁ 변화 효과 (피크 높이)', fontsize=11, weight='bold')
+        ax2.legend(fontsize=9)
+        ax2.grid(True, alpha=0.3)
+
+        # Example 3: tau effect
+        ax3 = example_fig.add_subplot(223)
+        for tau in [1e-3, 1e-2, 1e-1]:
+            model = ViscoelasticModeler(10, [2000], [tau])
+            E_double = [model.loss_modulus(w) for w in omega]
+            ax3.plot(freq_log, np.log10(np.array(E_double) + 1e-10), linewidth=2, label=f'τ₁ = {tau} s')
+
+        ax3.set_xlabel('log10 f (Hz)', fontsize=10)
+        ax3.set_ylabel('log10 E" (MPa)', fontsize=10)
+        ax3.set_title('τ₁ 변화 효과 (피크 위치)', fontsize=11, weight='bold')
+        ax3.legend(fontsize=9)
+        ax3.grid(True, alpha=0.3)
+
+        # Example 4: Multiple elements
+        ax4 = example_fig.add_subplot(224)
+        for n_elem in [1, 3]:
+            if n_elem == 1:
+                model = ViscoelasticModeler(10, [3000], [0.01])
+                label = '1개 요소'
+            else:
+                model = ViscoelasticModeler(10, [1000, 1000, 1000], [1e-3, 1e-2, 1e-1])
+                label = '3개 요소'
+
+            E_double = [model.loss_modulus(w) for w in omega]
+            ax4.plot(freq_log, np.log10(np.array(E_double) + 1e-10), linewidth=2, label=label)
+
+        ax4.set_xlabel('log10 f (Hz)', fontsize=10)
+        ax4.set_ylabel('log10 E" (MPa)', fontsize=10)
+        ax4.set_title('요소 개수 효과 (피크 넓이)', fontsize=11, weight='bold')
+        ax4.legend(fontsize=9)
+        ax4.grid(True, alpha=0.3)
+
+        example_fig.tight_layout()
+
+        # Embed in tkinter
+        example_canvas = FigureCanvasTkAgg(example_fig, master=parent)
+        example_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
     def create_element_entries(self):
         """Create entry fields for Maxwell elements in 2 columns"""
@@ -661,15 +743,40 @@ Example 4: Broadening loss peak
                 except:
                     return 1e10
 
-            # Set bounds for parameters
-            E_min = 10**np.min(self.master_E_prime) * 0.1
-            E_max = 10**np.max(self.master_E_prime) * 10
+            # Set bounds for parameters - more robust calculation
+            try:
+                # Calculate E range from data (data is already in log10 scale)
+                E_prime_data = 10**self.master_E_prime  # Convert to linear scale
+                E_double_data = 10**self.master_E_double
 
-            bounds = [(E_min, E_max)]  # E0
+                # Get reasonable bounds from data
+                E_all = np.concatenate([E_prime_data, E_double_data])
+                E_min = max(np.min(E_all) * 0.01, 1.0)  # At least 1 MPa
+                E_max = min(np.max(E_all) * 100, 1e6)  # At most 1e6 MPa
+
+                # Ensure bounds are valid
+                if not (np.isfinite(E_min) and np.isfinite(E_max) and E_min < E_max):
+                    raise ValueError("Invalid bounds from data")
+
+            except:
+                # Fallback to safe defaults
+                E_min = 1.0
+                E_max = 1e5
+
+            bounds = []
+            # E0 bounds
+            bounds.append((E_min, E_max))
+            # E_i bounds
             for i in range(n_elem):
-                bounds.append((E_min, E_max))  # E_i
+                bounds.append((E_min, E_max))
+            # tau_i bounds
             for i in range(n_elem):
-                bounds.append((1e-10, 1e6))  # tau_i
+                bounds.append((1e-10, 1e6))
+
+            # Verify all bounds are valid
+            for b in bounds:
+                if not (np.isfinite(b[0]) and np.isfinite(b[1]) and b[0] < b[1]):
+                    raise ValueError(f"Invalid bound: {b}")
 
             messagebox.showinfo("Fitting", "Fitting in progress... This may take a while.")
             self.master.update()
@@ -680,12 +787,18 @@ Example 4: Broadening loss peak
             E_i_fit = result.x[1:n_elem+1]
             tau_i_fit = result.x[n_elem+1:2*n_elem+1]
 
+            # Update parameters in GUI
             self.set_parameters(E0_fit, E_i_fit, tau_i_fit)
+
+            # Update both diagram and plot
             self.update_all()
 
             messagebox.showinfo("Success", f"Fitting completed!\nFinal error: {result.fun:.2e}")
 
         except Exception as e:
+            import traceback
+            error_msg = f"Fitting failed: {str(e)}\n\n{traceback.format_exc()}"
+            print(error_msg)  # Print to console for debugging
             messagebox.showerror("Error", f"Fitting failed: {str(e)}")
 
     def update_maxwell_diagram(self):
