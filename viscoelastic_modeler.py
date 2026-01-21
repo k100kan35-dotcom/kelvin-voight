@@ -57,13 +57,19 @@ class ViscoelasticModeler:
             E_double_prime += E * omega * tau / (1 + (omega * tau)**2)
         return E_double_prime
 
+    def element_contribution(self, omega, E_i, tau_i):
+        """Calculate individual element contribution to E' and E\""""
+        E_prime_i = E_i * (omega * tau_i)**2 / (1 + (omega * tau_i)**2)
+        E_double_i = E_i * omega * tau_i / (1 + (omega * tau_i)**2)
+        return E_prime_i, E_double_i
+
     def complex_modulus(self, omega):
         """Calculate complex modulus E*(ω) = E'(ω) + i·E"(ω)"""
         return self.storage_modulus(omega), self.loss_modulus(omega)
 
 
 class MaxwellDiagramCanvas:
-    """Canvas for drawing Generalized Maxwell model diagram - similar to reference image"""
+    """Canvas for drawing Generalized Maxwell model diagram"""
 
     def __init__(self, fig, ax, n_elements):
         self.fig = fig
@@ -78,19 +84,27 @@ class MaxwellDiagramCanvas:
         self.ax.plot(coil_x, coil_y, color=color, linewidth=2.5)
 
     def draw_dashpot(self, x, y, height, width=0.4, color='black'):
-        """Draw a dashpot (damper) symbol"""
-        # Cylinder
-        cylinder_h = height * 0.6
-        self.ax.add_patch(Rectangle((x - width/2, y), width, cylinder_h,
+        """Draw a dashpot (damper) symbol - like reference image"""
+        # Outer cylinder (rectangular)
+        cylinder_h = height * 0.55
+        cylinder_y = y + height * 0.1
+        self.ax.add_patch(Rectangle((x - width/2, cylinder_y), width, cylinder_h,
                                    facecolor='white', edgecolor=color, linewidth=2))
-        # Piston
-        piston_h = height * 0.3
-        piston_y = y + cylinder_h
-        self.ax.add_patch(Rectangle((x - width/1.5, piston_y), width*1.3, piston_h,
-                                   facecolor='lightgray', edgecolor=color, linewidth=2.5))
-        # Rod
-        self.ax.plot([x, x], [y, piston_y], color=color, linewidth=2.5)
-        self.ax.plot([x, x], [piston_y + piston_h, y + height], color=color, linewidth=2.5)
+
+        # Inner piston (smaller rectangle, filled)
+        piston_h = cylinder_h * 0.4
+        piston_y = cylinder_y + cylinder_h * 0.3
+        piston_w = width * 0.6
+        self.ax.add_patch(Rectangle((x - piston_w/2, piston_y), piston_w, piston_h,
+                                   facecolor='gray', edgecolor=color, linewidth=2))
+
+        # Rod extending from bottom
+        rod_bottom_y = y
+        self.ax.plot([x, x], [rod_bottom_y, cylinder_y], color=color, linewidth=2.5)
+
+        # Rod extending from top
+        rod_top_y = cylinder_y + cylinder_h
+        self.ax.plot([x, x], [rod_top_y, y + height], color=color, linewidth=2.5)
 
     def draw_maxwell_element(self, x, y_base, y_top, show_label=True, idx=None):
         """Draw a Maxwell element (spring and dashpot in series)"""
@@ -184,7 +198,7 @@ class ViscoelasticGUI:
         self.tau_i_default = [1e-6, 1e-4, 1e-2, 1.0]
 
         self.freq_min = -10
-        self.freq_max = 10  # Changed from 20 to 10
+        self.freq_max = 10
 
         # Master curve data
         self.master_freq = None
@@ -242,11 +256,11 @@ class ViscoelasticGUI:
         # ===== PHYSICS GUIDE TAB =====
         self.create_guide_tab(guide_tab)
 
-        # Right panel - Plots
+        # Right panel - Plots (shared)
         right_panel = Frame(main_frame)
         right_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # Top: Maxwell diagram (bigger now)
+        # Top: Maxwell diagram
         diagram_frame = Frame(right_panel, relief=tk.RIDGE, borderwidth=2)
         diagram_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
 
@@ -255,7 +269,7 @@ class ViscoelasticGUI:
         self.diagram_canvas = FigureCanvasTkAgg(self.diagram_fig, master=diagram_frame)
         self.diagram_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
-        # Bottom: Modulus plot
+        # Bottom: Modulus plot (shared across all tabs)
         plot_frame = Frame(right_panel, relief=tk.RIDGE, borderwidth=2)
         plot_frame.pack(fill=tk.BOTH, expand=True)
 
@@ -312,11 +326,19 @@ class ViscoelasticGUI:
 
         # Maxwell elements container (2 columns)
         Label(self.scrollable_frame, text="Maxwell Elements:", font=('Arial', 11, 'bold')).pack(pady=(20, 10))
-        self.elements_container = Frame(self.scrollable_frame)
-        self.elements_container.pack(fill=tk.X, padx=5)
+
+        # Container frame that will be recreated
+        self.elements_outer_container = Frame(self.scrollable_frame)
+        self.elements_outer_container.pack(fill=tk.X, padx=5)
 
         # Create initial elements
         self.create_element_entries()
+
+        # Show element contributions checkbox
+        self.show_contributions_var = tk.BooleanVar(value=False)
+        contrib_check = tk.Checkbutton(self.scrollable_frame, text="Show individual element contributions",
+                                      variable=self.show_contributions_var, font=('Arial', 10))
+        contrib_check.pack(pady=10)
 
         # Control buttons
         Button(self.scrollable_frame, text="Update Plots", command=self.update_all,
@@ -479,16 +501,17 @@ Example 4: Broadening loss peak
 
     def create_element_entries(self):
         """Create entry fields for Maxwell elements in 2 columns"""
-        # Clear existing
-        for frame in self.element_frames:
-            frame.destroy()
+        # Completely destroy and recreate the container to avoid shifting
+        for widget in self.elements_outer_container.winfo_children():
+            widget.destroy()
+
         self.element_frames.clear()
         self.E_entries.clear()
         self.tau_entries.clear()
 
         # Create container with 2 columns
-        col1_frame = Frame(self.elements_container)
-        col2_frame = Frame(self.elements_container)
+        col1_frame = Frame(self.elements_outer_container)
+        col2_frame = Frame(self.elements_outer_container)
         col1_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
         col2_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
 
@@ -614,33 +637,44 @@ Example 4: Broadening loss peak
             n_elem = self.n_elements
 
             def objective(params):
-                E0 = params[0]
-                E_i = params[1:n_elem+1]
-                tau_i = params[n_elem+1:2*n_elem+1]
+                try:
+                    E0 = params[0]
+                    E_i = params[1:n_elem+1]
+                    tau_i = params[n_elem+1:2*n_elem+1]
 
-                model = ViscoelasticModeler(E0, E_i, tau_i)
+                    model = ViscoelasticModeler(E0, E_i, tau_i)
 
-                freq = 10**self.master_freq
-                omega = 2 * np.pi * freq
+                    freq = 10**self.master_freq
+                    omega = 2 * np.pi * freq
 
-                E_prime_pred = np.array([model.storage_modulus(w) for w in omega])
-                E_double_pred = np.array([model.loss_modulus(w) for w in omega])
+                    E_prime_pred = np.array([model.storage_modulus(w) for w in omega])
+                    E_double_pred = np.array([model.loss_modulus(w) for w in omega])
 
-                error = np.sum((np.log10(E_prime_pred + 1e-10) - self.master_E_prime)**2) + \
-                       np.sum((np.log10(E_double_pred + 1e-10) - self.master_E_double)**2)
+                    # Avoid log of zero
+                    E_prime_pred = np.maximum(E_prime_pred, 1e-10)
+                    E_double_pred = np.maximum(E_double_pred, 1e-10)
 
-                return error
+                    error = np.sum((np.log10(E_prime_pred) - self.master_E_prime)**2) + \
+                           np.sum((np.log10(E_double_pred) - self.master_E_double)**2)
 
-            E_target_max = 10**np.max(self.master_E_prime)
-            bounds = [(1, E_target_max)]
+                    return error
+                except:
+                    return 1e10
+
+            # Set bounds for parameters
+            E_min = 10**np.min(self.master_E_prime) * 0.1
+            E_max = 10**np.max(self.master_E_prime) * 10
+
+            bounds = [(E_min, E_max)]  # E0
             for i in range(n_elem):
-                bounds.append((10, E_target_max))
+                bounds.append((E_min, E_max))  # E_i
             for i in range(n_elem):
-                bounds.append((1e-10, 1e5))
+                bounds.append((1e-10, 1e6))  # tau_i
 
             messagebox.showinfo("Fitting", "Fitting in progress... This may take a while.")
+            self.master.update()
 
-            result = differential_evolution(objective, bounds, maxiter=100, popsize=15, seed=42)
+            result = differential_evolution(objective, bounds, maxiter=150, popsize=20, seed=42, workers=1)
 
             E0_fit = result.x[0]
             E_i_fit = result.x[1:n_elem+1]
@@ -652,7 +686,7 @@ Example 4: Broadening loss peak
             messagebox.showinfo("Success", f"Fitting completed!\nFinal error: {result.fun:.2e}")
 
         except Exception as e:
-            messagebox.showerror("Error", f"Fitting failed: {e}")
+            messagebox.showerror("Error", f"Fitting failed: {str(e)}")
 
     def update_maxwell_diagram(self):
         """Update the Maxwell model diagram"""
@@ -679,9 +713,24 @@ Example 4: Broadening loss peak
         E_double_prime = np.array([model.loss_modulus(w) for w in omega])
 
         self.plot_ax.clear()
-        self.plot_ax.plot(freq_log, np.log10(E_prime), 'r-', linewidth=2.5, label="Storage modulus E'")
-        self.plot_ax.plot(freq_log, np.log10(E_double_prime), 'g-', linewidth=2.5, label='Loss modulus E"')
 
+        # Plot individual element contributions if checkbox is checked
+        if hasattr(self, 'show_contributions_var') and self.show_contributions_var.get():
+            colors = plt.cm.tab10(np.linspace(0, 1, len(E_i)))
+            for i, (E, tau, color) in enumerate(zip(E_i, tau_i, colors)):
+                E_prime_i = np.array([model.element_contribution(w, E, tau)[0] for w in omega])
+                E_double_i = np.array([model.element_contribution(w, E, tau)[1] for w in omega])
+
+                self.plot_ax.plot(freq_log, np.log10(E_prime_i + 1e-10), '--',
+                                color=color, linewidth=1.5, alpha=0.6, label=f"Element {i+1} E'")
+                self.plot_ax.plot(freq_log, np.log10(E_double_i + 1e-10), ':',
+                                color=color, linewidth=1.5, alpha=0.6, label=f'Element {i+1} E"')
+
+        # Plot total moduli
+        self.plot_ax.plot(freq_log, np.log10(E_prime), 'r-', linewidth=2.5, label="Total Storage modulus E'")
+        self.plot_ax.plot(freq_log, np.log10(E_double_prime), 'g-', linewidth=2.5, label='Total Loss modulus E"')
+
+        # Plot master curve data if available
         if self.master_freq is not None:
             self.plot_ax.scatter(self.master_freq, self.master_E_prime,
                                c='darkred', marker='o', s=30, alpha=0.6, label="Master E' data")
@@ -691,7 +740,7 @@ Example 4: Broadening loss peak
         self.plot_ax.set_xlabel('log10 f (Hz)', fontsize=12, weight='bold')
         self.plot_ax.set_ylabel('log10 E (MPa)', fontsize=12, weight='bold')
         self.plot_ax.set_title('Complex Modulus of Viscoelasticity', fontsize=14, weight='bold')
-        self.plot_ax.legend(fontsize=10, loc='best')
+        self.plot_ax.legend(fontsize=9, loc='best', ncol=2)
         self.plot_ax.grid(True, alpha=0.3)
 
         self.plot_fig.tight_layout()
