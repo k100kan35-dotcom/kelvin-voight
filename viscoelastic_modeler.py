@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Viscoelastic Rubber Compound Modeler v3.3
-Fast fitting with improved initialization from middle frequency
+Viscoelastic Rubber Compound Modeler v4.0
+Literature-based Collocation Method with NNLS optimization
 """
 
 import numpy as np
@@ -12,7 +12,7 @@ from matplotlib.patches import Rectangle
 import matplotlib.font_manager as fm
 import tkinter as tk
 from tkinter import ttk, Frame, Label, Entry, Button, Text, Scrollbar, messagebox
-from scipy.optimize import differential_evolution
+from scipy.optimize import differential_evolution, nnls
 from scipy.interpolate import UnivariateSpline
 import threading
 
@@ -472,7 +472,8 @@ class ViscoelasticGUI:
         fitting_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         initial_msg = """데이터 로드 후 "Fit Model" 클릭
-설정된 요소 개수로 피팅 수행
+Collocation Method로 자동 피팅
+요소 개수 자동 선택 (decade당 4개)
 """
         self.fitting_info_text.insert('1.0', initial_msg)
         self.fitting_info_text.config(state=tk.DISABLED)
@@ -521,19 +522,25 @@ class ViscoelasticGUI:
 사용법:
 1. Data 탭 → 데이터 붙여넣기
 2. "데이터 로드" 클릭
-3. Parameters 탭 → 요소 개수 선택 (1-20개)
-4. "Fit Model" 클릭 → 피팅 완료!
+3. "Fit Model" 클릭 → 자동 피팅!
 
 버튼:
 • 삭제: 모든 요소 지우기
-• Fit Model: Maxwell 모델 피팅
+• Fit Model: Maxwell 모델 피팅 (자동 요소 선택)
 • 중지: 피팅 중단
 
-개선된 알고리즘:
-• 노이즈 데이터 스무딩 (spline)
-• 중간 주파수 기반 초기값
-• 더 많은 반복 (500회)
-• 더 큰 population (40개)
+v4.0 새로운 알고리즘 (문헌 기반):
+• Collocation Method (표준 방법)
+• NNLS (Non-negative Least Squares)
+• 자동 요소 개수 선택 (각 decade당 4개)
+• Log-spaced relaxation times (고정)
+• 매우 빠름 (< 1초)
+• 높은 정확도 (R² > 0.99 목표)
+
+참고 문헌:
+- NREL pyvisco library
+- MDPI Applied Sciences (2018)
+- Springer Materials & Structures (2019)
 """
 
         korean_font = get_korean_font_for_tk()
@@ -790,7 +797,7 @@ class ViscoelasticGUI:
         self.update_fitting_info("\n>>> 사용자가 중지 <<<\n")
 
     def fit_to_master_curve(self):
-        """Fit to smoothed data"""
+        """Fit using Collocation Method (literature-based)"""
         try:
             self.fitting_in_progress = True
             self.fitting_history = []
@@ -801,118 +808,101 @@ class ViscoelasticGUI:
             E_double_data = self.smooth_E_double if self.smooth_E_double is not None else self.master_E_double
 
             omega = 2 * np.pi * freq
-            n_elem = self.n_elements
 
-            self.update_fitting_info(f"Maxwell 요소: {n_elem}개\n")
-
-            E_all = np.concatenate([E_prime_data, E_double_data])
-            E_all_pos = E_all[E_all > 0]
-            E_min = max(np.min(E_all_pos) * 0.001, 0.1)
-            E_max = min(np.max(E_all_pos) * 100, 1e7)
-
-            self.update_fitting_info(f"E 범위: [{E_min:.2e}, {E_max:.2e}]\n\n")
-
-            iteration_count = [0]
-
-            def objective(params):
-                if self.stop_fitting:
-                    return 1e20
-
-                try:
-                    E0 = params[0]
-                    E_i = params[1:n_elem+1]
-                    tau_i = params[n_elem+1:2*n_elem+1]
-
-                    model = ViscoelasticModeler(E0, E_i, tau_i)
-
-                    E_prime_pred = np.array([model.storage_modulus(w) for w in omega])
-                    E_double_pred = np.array([model.loss_modulus(w) for w in omega])
-
-                    E_prime_pred = np.maximum(E_prime_pred, 1e-10)
-                    E_double_pred = np.maximum(E_double_pred, 1e-10)
-                    E_prime_target = np.maximum(E_prime_data, 1e-10)
-                    E_double_target = np.maximum(E_double_data, 1e-10)
-
-                    error_prime = np.sum((np.log10(E_prime_pred) - np.log10(E_prime_target))**2)
-                    error_double = np.sum((np.log10(E_double_pred) - np.log10(E_double_target))**2)
-                    total_error = error_prime + 2.0 * error_double
-
-                    iteration_count[0] += 1
-                    if iteration_count[0] % 50 == 0:
-                        self.fitting_history.append(total_error)
-                        self.master.after(0, self.update_convergence_plot)
-                        self.master.after(0, lambda: self.update_fitting_info(
-                            f"반복 {iteration_count[0]}: Error = {total_error:.4e}\n"))
-
-                    return total_error
-                except:
-                    return 1e10
-
-            bounds = [(E_min, E_max/10)] + [(E_min, E_max)] * n_elem
-
+            # Auto-determine number of elements based on frequency range (literature method)
             freq_min_val = np.min(freq)
             freq_max_val = np.max(freq)
-            tau_min = max(1.0 / (2 * np.pi * freq_max_val * 1000), 1e-12)
-            tau_max = min(1.0 / (2 * np.pi * freq_min_val * 0.001), 1e8)
-            bounds += [(tau_min, tau_max)] * n_elem
+            n_decades = np.log10(freq_max_val / freq_min_val)
+            elements_per_decade = 4  # Standard from literature
+            n_elem = max(int(np.ceil(n_decades * elements_per_decade)), 3)
 
-            # Initialize tau based on middle frequency (geometric mean)
-            freq_middle = np.sqrt(freq_min_val * freq_max_val)
-            tau_middle = 1.0 / (2 * np.pi * freq_middle)
+            # Update GUI with auto-determined element count
+            self.master.after(0, lambda: self.n_elem_var.set(str(n_elem)))
+            self.master.after(0, lambda: setattr(self, 'n_elements', n_elem))
+            self.master.after(0, self.create_element_entries)
 
-            self.update_fitting_info(f"중간 주파수: {freq_middle:.2e} Hz\n")
-            self.update_fitting_info(f"초기 tau 중심: {tau_middle:.2e} s\n")
-            self.update_fitting_info(f"최적화 시작...\n")
+            self.update_fitting_info(f"주파수 범위: {n_decades:.2f} decades\n")
+            self.update_fitting_info(f"자동 선택: {n_elem}개 요소 ({elements_per_decade}/decade)\n")
+            self.update_fitting_info(f"문헌 기반 Collocation Method 사용\n\n")
 
-            # Create initial population centered around middle frequency
-            popsize = 40
-            init_pop = []
-            for _ in range(popsize):
-                # E values: random in bounds
-                E0_init = np.random.uniform(E_min, E_max/10)
-                E_i_init = np.random.uniform(E_min, E_max, n_elem)
-
-                # tau values: log-spaced around middle frequency
-                tau_i_init = np.logspace(
-                    np.log10(tau_middle) - 2,
-                    np.log10(tau_middle) + 2,
-                    n_elem
-                ) * np.random.uniform(0.5, 2.0, n_elem)
-
-                # Clip to bounds
-                tau_i_init = np.clip(tau_i_init, tau_min, tau_max)
-
-                init_pop.append(np.concatenate([[E0_init], E_i_init, tau_i_init]))
-
-            init_pop = np.array(init_pop)
-
-            result = differential_evolution(
-                objective, bounds,
-                maxiter=500, popsize=popsize,
-                init=init_pop,  # Use custom initialization
-                seed=42, workers=1,
-                atol=1e-10, tol=1e-8,
-                updating='deferred', polish=True
+            # STEP 1: Fix relaxation times (log-spaced) - Standard collocation method
+            tau_i = np.logspace(
+                np.log10(1.0 / (2 * np.pi * freq_max_val)),
+                np.log10(1.0 / (2 * np.pi * freq_min_val)),
+                n_elem
             )
 
-            if not self.stop_fitting:
-                E0_fit = result.x[0]
-                E_i_fit = result.x[1:n_elem+1]
-                tau_i_fit = result.x[n_elem+1:2*n_elem+1]
+            self.update_fitting_info(f"Relaxation times (고정):\n")
+            for i, tau in enumerate(tau_i):
+                self.update_fitting_info(f"  τ{i+1} = {tau:.3e} s\n")
 
+            # STEP 2: Build linear system for E_0 and E_i (NNLS)
+            # For storage modulus E'(ω) = E_0 + Σ E_i * (ω*τ_i)^2 / (1 + (ω*τ_i)^2)
+            # For loss modulus E''(ω) = Σ E_i * ω*τ_i / (1 + (ω*τ_i)^2)
+
+            n_freq = len(omega)
+
+            # Build matrix A for storage modulus
+            A_prime = np.zeros((n_freq, n_elem + 1))
+            A_prime[:, 0] = 1.0  # E_0 contribution (constant)
+            for i in range(n_elem):
+                A_prime[:, i+1] = (omega * tau_i[i])**2 / (1 + (omega * tau_i[i])**2)
+
+            # Build matrix A for loss modulus
+            A_double = np.zeros((n_freq, n_elem + 1))
+            A_double[:, 0] = 0.0  # E_0 doesn't contribute to E''
+            for i in range(n_elem):
+                A_double[:, i+1] = omega * tau_i[i] / (1 + (omega * tau_i[i])**2)
+
+            # Combine both (weight loss modulus more)
+            weight_loss = 1.5
+            A_combined = np.vstack([A_prime, weight_loss * A_double])
+            b_combined = np.concatenate([E_prime_data, weight_loss * E_double_data])
+
+            self.update_fitting_info(f"\n선형 시스템 구성:\n")
+            self.update_fitting_info(f"  행렬 크기: {A_combined.shape}\n")
+            self.update_fitting_info(f"  Loss modulus 가중치: {weight_loss}\n")
+
+            # STEP 3: Solve with NNLS (non-negative least squares)
+            self.update_fitting_info(f"\nNNLS 최적화 시작...\n")
+
+            E_params, residual = nnls(A_combined, b_combined)
+
+            E0_fit = E_params[0]
+            E_i_fit = E_params[1:]
+            tau_i_fit = tau_i
+
+            # Calculate final error
+            model = ViscoelasticModeler(E0_fit, E_i_fit, tau_i_fit)
+            E_prime_pred = np.array([model.storage_modulus(w) for w in omega])
+            E_double_pred = np.array([model.loss_modulus(w) for w in omega])
+
+            error_prime = np.sum((E_prime_pred - E_prime_data)**2)
+            error_double = np.sum((E_double_pred - E_double_data)**2)
+            total_error = error_prime + error_double
+
+            # Calculate R²
+            ss_res = total_error
+            ss_tot_prime = np.sum((E_prime_data - np.mean(E_prime_data))**2)
+            ss_tot_double = np.sum((E_double_data - np.mean(E_double_data))**2)
+            R2 = 1 - ss_res / (ss_tot_prime + ss_tot_double)
+
+            if not self.stop_fitting:
                 self.master.after(0, lambda: self.set_parameters(E0_fit, E_i_fit, tau_i_fit))
                 self.master.after(0, self.update_all)
 
-                result_msg = f"\n{'='*45}\n피팅 완료!\n{'='*45}\n"
-                result_msg += f"최종 에러: {result.fun:.4e}\n"
-                result_msg += f"반복: {iteration_count[0]}\n\n"
+                result_msg = f"\n{'='*45}\n피팅 완료! (Collocation Method)\n{'='*45}\n"
+                result_msg += f"NNLS Residual: {residual:.4e}\n"
+                result_msg += f"Total Error: {total_error:.4e}\n"
+                result_msg += f"R² = {R2:.6f}\n\n"
                 result_msg += f"E₀ = {E0_fit:.2e} MPa\n"
                 for i in range(n_elem):
                     result_msg += f"E{i+1}={E_i_fit[i]:.2e}, τ{i+1}={tau_i_fit[i]:.2e}\n"
                 result_msg += f"{'='*45}\n"
 
                 self.update_fitting_info(result_msg)
-                self.master.after(0, lambda: messagebox.showinfo("완료", f"피팅 완료!\nError: {result.fun:.2e}"))
+                self.master.after(0, lambda: messagebox.showinfo("완료",
+                    f"피팅 완료!\nElements: {n_elem}\nR²: {R2:.4f}\nError: {total_error:.2e}"))
 
         except Exception as e:
             import traceback
@@ -922,7 +912,6 @@ class ViscoelasticGUI:
 
         finally:
             self.fitting_in_progress = False
-
     def update_fitting_info(self, message):
         def _update():
             self.fitting_info_text.config(state=tk.NORMAL)
