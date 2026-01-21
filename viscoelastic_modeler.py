@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Viscoelastic Rubber Compound Modeler v3.2
-Advanced fitting with data smoothing and auto-optimization
+Viscoelastic Rubber Compound Modeler v3.3
+Fast fitting with improved initialization from middle frequency
 """
 
 import numpy as np
@@ -17,18 +17,30 @@ from scipy.interpolate import UnivariateSpline
 import threading
 
 
-# Korean font setup
+# Font setup with subscript support
 def setup_korean_font():
     try:
+        # Use DejaVu Sans first (supports subscripts), fallback to Korean fonts
+        available_fonts = [f.name for f in fm.fontManager.ttflist]
+
+        # Check for DejaVu Sans (supports subscripts)
+        if 'DejaVu Sans' in available_fonts:
+            plt.rcParams['font.family'] = 'DejaVu Sans'
+            plt.rcParams['axes.unicode_minus'] = False
+            return 'DejaVu Sans'
+
+        # Fallback to Korean fonts
         korean_fonts = ['NanumGothic', 'Malgun Gothic', 'AppleGothic', 'Noto Sans KR']
         for font in korean_fonts:
-            if font in [f.name for f in fm.fontManager.ttflist]:
+            if font in available_fonts:
                 plt.rcParams['font.family'] = font
                 plt.rcParams['axes.unicode_minus'] = False
                 return font
-        plt.rcParams['font.family'] = 'DejaVu Sans'
+
+        # Last resort
+        plt.rcParams['font.family'] = 'sans-serif'
         plt.rcParams['axes.unicode_minus'] = False
-        return 'DejaVu Sans'
+        return 'sans-serif'
     except:
         return 'TkDefaultFont'
 
@@ -383,7 +395,7 @@ class ViscoelasticGUI:
         Button(btn_frame, text="지우기", command=lambda: self.data_text.delete('1.0', tk.END),
                bg='#FF5722', fg='white', font=('Arial', 10, 'bold'), width=10).pack(side=tk.LEFT, padx=3)
 
-        Button(btn_frame, text="Auto Fit", command=self.auto_fit_model,
+        Button(btn_frame, text="Fit Model", command=self.auto_fit_model,
                bg='#E91E63', fg='white', font=('Arial', 10, 'bold'), width=12).pack(side=tk.LEFT, padx=3)
 
         self.stop_button = Button(btn_frame, text="중지", command=self.stop_fitting_process,
@@ -459,8 +471,8 @@ class ViscoelasticGUI:
         self.fitting_info_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         fitting_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        initial_msg = """데이터 로드 후 "Auto Fit" 클릭
-자동으로 요소 선택 + 피팅 수행
+        initial_msg = """데이터 로드 후 "Fit Model" 클릭
+설정된 요소 개수로 피팅 수행
 """
         self.fitting_info_text.insert('1.0', initial_msg)
         self.fitting_info_text.config(state=tk.DISABLED)
@@ -509,17 +521,17 @@ class ViscoelasticGUI:
 사용법:
 1. Data 탭 → 데이터 붙여넣기
 2. "데이터 로드" 클릭
-3. "Auto Fit" 클릭
-4. 자동으로 요소 선택 + 피팅 완료!
+3. Parameters 탭 → 요소 개수 선택 (1-20개)
+4. "Fit Model" 클릭 → 피팅 완료!
 
 버튼:
 • 삭제: 모든 요소 지우기
-• Auto Fit: 자동 피팅 (요소 선택 포함)
+• Fit Model: Maxwell 모델 피팅
 • 중지: 피팅 중단
 
 개선된 알고리즘:
-• 노이즈 데이터 스무딩
-• 더 나은 초기값 추정
+• 노이즈 데이터 스무딩 (spline)
+• 중간 주파수 기반 초기값
 • 더 많은 반복 (500회)
 • 더 큰 population (40개)
 """
@@ -661,7 +673,7 @@ class ViscoelasticGUI:
             messagebox.showerror("오류", f"데이터 로드 실패: {e}")
 
     def auto_fit_model(self):
-        """Auto select elements + fit"""
+        """Fit model directly (no auto-selection)"""
         if self.master_freq is None:
             messagebox.showerror("오류", "먼저 데이터를 로드하세요")
             return
@@ -673,36 +685,19 @@ class ViscoelasticGUI:
         # Switch to fitting tab
         self.param_notebook.select(3)
 
-        # Start auto-fitting thread
-        auto_fit_thread = threading.Thread(target=self.auto_fit_process, daemon=True)
-        auto_fit_thread.start()
+        # Start fitting thread directly
+        fit_thread = threading.Thread(target=self.auto_fit_process, daemon=True)
+        fit_thread.start()
 
     def auto_fit_process(self):
-        """Auto-select elements then fit"""
+        """Direct fitting without auto-selection"""
         try:
             self.stop_fitting = False
             self.stop_button.config(state=tk.NORMAL)
 
-            # Step 1: Auto-select elements
+            # Direct fitting (no element selection step)
             self.update_fitting_info("=" * 50 + "\n")
-            self.update_fitting_info("단계 1: 최적 요소 개수 자동 선택\n")
-            self.update_fitting_info("=" * 50 + "\n")
-
-            best_n = self.auto_select_elements_internal()
-
-            if self.stop_fitting:
-                return
-
-            # Update GUI
-            self.master.after(0, lambda: self.n_elem_var.set(str(best_n)))
-            self.master.after(0, lambda: setattr(self, 'n_elements', best_n))
-            self.master.after(0, self.create_element_entries)
-
-            self.update_fitting_info(f"\n최적 요소 개수: {best_n}\n\n")
-
-            # Step 2: Fit
-            self.update_fitting_info("=" * 50 + "\n")
-            self.update_fitting_info("단계 2: Maxwell 모델 피팅\n")
+            self.update_fitting_info("Maxwell 모델 피팅 시작\n")
             self.update_fitting_info("=" * 50 + "\n\n")
 
             self.fit_to_master_curve()
@@ -714,73 +709,6 @@ class ViscoelasticGUI:
             self.master.after(0, lambda: messagebox.showerror("오류", str(e)))
         finally:
             self.stop_button.config(state=tk.DISABLED)
-
-    def auto_select_elements_internal(self):
-        """Internal auto-selection (returns best_n)"""
-        freq = self.smooth_freq if self.smooth_freq is not None else self.master_freq
-        E_prime_data = self.smooth_E_prime if self.smooth_E_prime is not None else self.master_E_prime
-        E_double_data = self.smooth_E_double if self.smooth_E_double is not None else self.master_E_double
-
-        omega = 2 * np.pi * freq
-
-        best_n = 4
-        best_aic = float('inf')
-
-        for n in range(2, 9):  # Test 2-8 elements
-            if self.stop_fitting:
-                return best_n
-
-            try:
-                self.update_fitting_info(f"테스트 중: {n}개 요소...\n")
-
-                E_all = np.concatenate([E_prime_data, E_double_data])
-                E_min = max(np.min(E_all[E_all > 0]) * 0.001, 0.1)
-                E_max = min(np.max(E_all[E_all > 0]) * 100, 1e7)
-
-                bounds = [(E_min, E_max/10)] + [(E_min, E_max)] * n
-                tau_min = 1.0 / (2 * np.pi * np.max(freq) * 1000)
-                tau_max = 1.0 / (2 * np.pi * np.min(freq) * 0.001)
-                bounds += [(tau_min, tau_max)] * n
-
-                def objective(params):
-                    if self.stop_fitting:
-                        return 1e20
-                    E0 = params[0]
-                    E_i = params[1:n+1]
-                    tau_i = params[n+1:2*n+1]
-                    model = ViscoelasticModeler(E0, E_i, tau_i)
-
-                    E_prime_pred = np.array([model.storage_modulus(w) for w in omega])
-                    E_double_pred = np.array([model.loss_modulus(w) for w in omega])
-
-                    E_prime_pred = np.maximum(E_prime_pred, 1e-10)
-                    E_double_pred = np.maximum(E_double_pred, 1e-10)
-                    E_prime_target = np.maximum(E_prime_data, 1e-10)
-                    E_double_target = np.maximum(E_double_data, 1e-10)
-
-                    error = np.sum((np.log10(E_prime_pred) - np.log10(E_prime_target))**2) + \
-                           2.0 * np.sum((np.log10(E_double_pred) - np.log10(E_double_target))**2)
-                    return error
-
-                result = differential_evolution(objective, bounds, maxiter=150, popsize=20,
-                                               seed=42, workers=1, polish=False)
-
-                k = 2 * n + 1
-                N = 2 * len(freq)
-                RSS = result.fun
-                AIC = N * np.log(RSS / N) + 2 * k
-
-                self.update_fitting_info(f"  {n}개 요소: AIC = {AIC:.2f}, Error = {RSS:.2e}\n")
-
-                if AIC < best_aic:
-                    best_aic = AIC
-                    best_n = n
-
-            except Exception as e:
-                self.update_fitting_info(f"  {n}개 요소: 실패\n")
-                continue
-
-        return best_n
 
     def update_wlf_parameters(self):
         try:
@@ -928,11 +856,40 @@ class ViscoelasticGUI:
             tau_max = min(1.0 / (2 * np.pi * freq_min_val * 0.001), 1e8)
             bounds += [(tau_min, tau_max)] * n_elem
 
+            # Initialize tau based on middle frequency (geometric mean)
+            freq_middle = np.sqrt(freq_min_val * freq_max_val)
+            tau_middle = 1.0 / (2 * np.pi * freq_middle)
+
+            self.update_fitting_info(f"중간 주파수: {freq_middle:.2e} Hz\n")
+            self.update_fitting_info(f"초기 tau 중심: {tau_middle:.2e} s\n")
             self.update_fitting_info(f"최적화 시작...\n")
+
+            # Create initial population centered around middle frequency
+            popsize = 40
+            init_pop = []
+            for _ in range(popsize):
+                # E values: random in bounds
+                E0_init = np.random.uniform(E_min, E_max/10)
+                E_i_init = np.random.uniform(E_min, E_max, n_elem)
+
+                # tau values: log-spaced around middle frequency
+                tau_i_init = np.logspace(
+                    np.log10(tau_middle) - 2,
+                    np.log10(tau_middle) + 2,
+                    n_elem
+                ) * np.random.uniform(0.5, 2.0, n_elem)
+
+                # Clip to bounds
+                tau_i_init = np.clip(tau_i_init, tau_min, tau_max)
+
+                init_pop.append(np.concatenate([[E0_init], E_i_init, tau_i_init]))
+
+            init_pop = np.array(init_pop)
 
             result = differential_evolution(
                 objective, bounds,
-                maxiter=500, popsize=40,  # Increased!
+                maxiter=500, popsize=popsize,
+                init=init_pop,  # Use custom initialization
                 seed=42, workers=1,
                 atol=1e-10, tol=1e-8,
                 updating='deferred', polish=True
