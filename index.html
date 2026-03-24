@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kelvin-Voigt 2D Brush 모델 — 격자(Grid) 기반 시각화</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', Tahoma, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      overflow-x: hidden;
+    }
+    header {
+      text-align: center;
+      padding: 18px;
+      background: #16213e;
+      border-bottom: 2px solid #0f3460;
+    }
+    header h1 { font-size: 1.5em; color: #e94560; }
+    header p { font-size: 0.85em; color: #aaa; margin-top: 4px; }
+
+    .main-container {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      gap: 0;
+      min-height: calc(100vh - 76px);
+    }
+
+    .controls {
+      background: #16213e;
+      padding: 14px;
+      overflow-y: auto;
+      max-height: calc(100vh - 76px);
+      border-right: 2px solid #0f3460;
+    }
+    .control-group {
+      margin-bottom: 14px;
+      background: #1a1a2e;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid #0f3460;
+    }
+    .control-group h3 {
+      font-size: 0.8em;
+      color: #e94560;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .control-row {
+      margin-bottom: 6px;
+    }
+    .control-row label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.78em;
+      margin-bottom: 2px;
+      color: #ccc;
+    }
+    .control-row label span.val {
+      color: #53d8fb;
+      font-weight: bold;
+    }
+    input[type="range"] {
+      width: 100%;
+      accent-color: #e94560;
+      cursor: pointer;
+    }
+    .info-box {
+      background: #0f3460;
+      padding: 9px;
+      border-radius: 6px;
+      font-size: 0.72em;
+      line-height: 1.5;
+      color: #bbb;
+      margin-top: 8px;
+    }
+    .info-box strong { color: #53d8fb; }
+
+    .viz-area {
+      display: grid;
+      grid-template-rows: 1fr 1fr;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      padding: 6px;
+      background: #1a1a2e;
+    }
+    .viz-panel {
+      background: #16213e;
+      border-radius: 8px;
+      border: 1px solid #0f3460;
+      position: relative;
+      overflow: hidden;
+    }
+    .viz-panel canvas {
+      width: 100%;
+      height: 100%;
+    }
+    .viz-panel .panel-title {
+      position: absolute;
+      top: 5px;
+      left: 8px;
+      font-size: 0.72em;
+      color: #e94560;
+      font-weight: bold;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 5px;
+      margin-top: 8px;
+    }
+    button {
+      flex: 1;
+      padding: 7px;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.78em;
+      cursor: pointer;
+      font-weight: bold;
+      transition: background 0.2s;
+    }
+    .btn-start { background: #27ae60; color: #fff; }
+    .btn-start:hover { background: #2ecc71; }
+    .btn-stop { background: #e94560; color: #fff; }
+    .btn-stop:hover { background: #ff6b81; }
+    .btn-reset { background: #0f3460; color: #fff; }
+    .btn-reset:hover { background: #1a5276; }
+
+    .mode-selector {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 8px;
+    }
+    .mode-btn {
+      flex: 1;
+      padding: 5px;
+      border: 2px solid #0f3460;
+      background: transparent;
+      color: #aaa;
+      border-radius: 6px;
+      font-size: 0.68em;
+      cursor: pointer;
+    }
+    .mode-btn.active {
+      background: #0f3460;
+      color: #53d8fb;
+      border-color: #53d8fb;
+    }
+
+    @media (max-width: 900px) {
+      .main-container {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr;
+      }
+      .controls {
+        max-height: none;
+        border-right: none;
+        border-bottom: 2px solid #0f3460;
+      }
+      .viz-area { min-height: 80vh; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Kelvin-Voigt 2D Brush 모델 — 격자(Grid) 기반</h1>
+    <p>접촉 패치를 NxM 격자로 분할 | 각 셀의 브리슬이 독립적 Kelvin-Voigt 역학 적용 | 위치별 하중 분포</p>
+  </header>
+
+  <div class="main-container">
+    <div class="controls">
+      <div class="control-group">
+        <h3>Kelvin-Voigt 파라미터</h3>
+        <div class="control-row">
+          <label>탄성계수 E (스프링) <span class="val" id="valE">50</span> N/m</label>
+          <input type="range" id="sliderE" min="5" max="200" value="50" step="1">
+        </div>
+        <div class="control-row">
+          <label>점성계수 η (대시팟) <span class="val" id="valEta">30</span> N·s/m</label>
+          <input type="range" id="sliderEta" min="1" max="100" value="30" step="1">
+        </div>
+        <div class="control-row">
+          <label>브러시 강성 k_b <span class="val" id="valKb">40</span> N/m</label>
+          <input type="range" id="sliderKb" min="5" max="150" value="40" step="1">
+        </div>
+      </div>
+
+      <div class="control-group">
+        <h3>격자(Grid) 설정</h3>
+        <div class="control-row">
+          <label>격자 행(Rows) <span class="val" id="valRows">5</span></label>
+          <input type="range" id="sliderRows" min="2" max="10" value="5" step="1">
+        </div>
+        <div class="control-row">
+          <label>격자 열(Cols) <span class="val" id="valCols">8</span></label>
+          <input type="range" id="sliderCols" min="3" max="15" value="8" step="1">
+        </div>
+        <div class="control-row">
+          <label>브리슬 길이 <span class="val" id="valLen">70</span> px</label>
+          <input type="range" id="sliderLen" min="30" max="120" value="70" step="1">
+        </div>
+      </div>
+
+      <div class="control-group">
+        <h3>하중 조건</h3>
+        <div class="mode-selector">
+          <button class="mode-btn active" data-mode="step" id="modeStep">계단</button>
+          <button class="mode-btn" data-mode="sine" id="modeSine">사인파</button>
+          <button class="mode-btn" data-mode="ramp" id="modeRamp">경사</button>
+          <button class="mode-btn" data-mode="rolling" id="modeRolling">롤링</button>
+        </div>
+        <div class="control-row">
+          <label>하중 크기 F₀ <span class="val" id="valF">5.0</span> N</label>
+          <input type="range" id="sliderF" min="0.5" max="15" value="5" step="0.1">
+        </div>
+        <div class="control-row" id="freqRow">
+          <label>주파수 ω <span class="val" id="valOmega">1.0</span> Hz</label>
+          <input type="range" id="sliderOmega" min="0.1" max="5" value="1" step="0.1">
+        </div>
+        <div class="control-row" id="rollSpeedRow">
+          <label>롤링 속도 <span class="val" id="valRollSpeed">1.0</span></label>
+          <input type="range" id="sliderRollSpeed" min="0.2" max="5" value="1" step="0.1">
+        </div>
+      </div>
+
+      <div class="control-group">
+        <h3>시뮬레이션</h3>
+        <div class="control-row">
+          <label>시간 배속 <span class="val" id="valSpeed">1.0</span>x</label>
+          <input type="range" id="sliderSpeed" min="0.1" max="3" value="1" step="0.1">
+        </div>
+        <div class="btn-row">
+          <button class="btn-start" id="btnStart">▶ 시작</button>
+          <button class="btn-stop" id="btnStop">■ 정지</button>
+          <button class="btn-reset" id="btnReset">↺ 리셋</button>
+        </div>
+      </div>
+
+      <div class="control-group">
+        <h3>개념 설명</h3>
+        <div class="info-box">
+          <strong>2D 격자 브러시 모델</strong>은 접촉 패치(Contact Patch)를 NxM 격자로 이산화합니다.<br><br>
+          각 격자 셀에는 독립적인 <strong>Kelvin-Voigt 요소</strong>(스프링 + 대시팟 병렬)가 있습니다.<br><br>
+          <strong>σᵢⱼ = E·εᵢⱼ + η·(dεᵢⱼ/dt)</strong><br><br>
+          • <strong>격자 위치 (i,j)</strong>에 따라 하중 분포가 달라짐<br>
+          • <strong>롤링 모드</strong>: 접촉 패치 진입→변형 증가→이탈 시뮬레이션<br>
+          • <strong>상단 뷰</strong>: 격자 변형 크기를 색상으로 시각화<br>
+          • <strong>측면 뷰</strong>: 브리슬 변형을 곡선으로 시각화
+        </div>
+      </div>
+    </div>
+
+    <div class="viz-area">
+      <div class="viz-panel" id="panelTop">
+        <div class="panel-title">격자 상단 뷰 (Contact Patch)</div>
+        <canvas id="canvasTop"></canvas>
+      </div>
+      <div class="viz-panel" id="panelSide">
+        <div class="panel-title">격자 측면 뷰 (브리슬 변형)</div>
+        <canvas id="canvasSide"></canvas>
+      </div>
+      <div class="viz-panel" id="panelCreep">
+        <div class="panel-title">크리프 응답 (평균 변형-시간)</div>
+        <canvas id="canvasCreep"></canvas>
+      </div>
+      <div class="viz-panel" id="panelStress">
+        <div class="panel-title">응력-변형률 곡선 (격자 중심)</div>
+        <canvas id="canvasStress"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ── State ──
+    const state = {
+      E: 50, eta: 30, kb: 40,
+      F0: 5, omega: 1, rollSpeed: 1,
+      rows: 5, cols: 8, bristleLen: 70,
+      speed: 1,
+      mode: 'step',
+      running: false,
+      time: 0,
+      // 2D grid of bristle states: grid[row][col] = { strain, strainRate }
+      grid: [],
+      history: [],       // { t, avgStrain, centerStress, avgForce }
+      maxHistory: 600,
+    };
+
+    function initGrid() {
+      state.grid = [];
+      for (let r = 0; r < state.rows; r++) {
+        const row = [];
+        for (let c = 0; c < state.cols; c++) {
+          row.push({ strain: 0, strainRate: 0 });
+        }
+        state.grid.push(row);
+      }
+    }
+    initGrid();
+
+    // ── DOM refs ──
+    const $ = id => document.getElementById(id);
+    const canvasTop = $('canvasTop');
+    const canvasSide = $('canvasSide');
+    const canvasCreep = $('canvasCreep');
+    const canvasStress = $('canvasStress');
+    const ctxT = canvasTop.getContext('2d');
+    const ctxSd = canvasSide.getContext('2d');
+    const ctxC = canvasCreep.getContext('2d');
+    const ctxS = canvasStress.getContext('2d');
+
+    // ── Slider bindings ──
+    function bindSlider(sliderId, valId, stateKey, parser = parseFloat) {
+      const slider = $(sliderId);
+      const valEl = $(valId);
+      slider.addEventListener('input', () => {
+        const oldVal = state[stateKey];
+        state[stateKey] = parser(slider.value);
+        valEl.textContent = slider.value;
+        if (stateKey === 'rows' || stateKey === 'cols') initGrid();
+      });
+    }
+    bindSlider('sliderE', 'valE', 'E');
+    bindSlider('sliderEta', 'valEta', 'eta');
+    bindSlider('sliderKb', 'valKb', 'kb');
+    bindSlider('sliderF', 'valF', 'F0');
+    bindSlider('sliderOmega', 'valOmega', 'omega');
+    bindSlider('sliderRollSpeed', 'valRollSpeed', 'rollSpeed');
+    bindSlider('sliderRows', 'valRows', 'rows', parseInt);
+    bindSlider('sliderCols', 'valCols', 'cols', parseInt);
+    bindSlider('sliderLen', 'valLen', 'bristleLen', parseInt);
+    bindSlider('sliderSpeed', 'valSpeed', 'speed');
+
+    // Mode buttons
+    document.querySelectorAll('.mode-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        state.mode = btn.dataset.mode;
+        $('freqRow').style.display = state.mode === 'sine' ? 'block' : 'none';
+        $('rollSpeedRow').style.display = state.mode === 'rolling' ? 'block' : 'none';
+      });
+    });
+    $('freqRow').style.display = 'none';
+    $('rollSpeedRow').style.display = 'none';
+
+    // Buttons
+    $('btnStart').addEventListener('click', () => { state.running = true; });
+    $('btnStop').addEventListener('click', () => { state.running = false; });
+    $('btnReset').addEventListener('click', () => {
+      state.running = false;
+      state.time = 0;
+      state.history = [];
+      initGrid();
+    });
+
+    // ── Resize canvases ──
+    function resizeCanvas(canvas) {
+      const rect = canvas.parentElement.getBoundingClientRect();
+      canvas.width = rect.width * devicePixelRatio;
+      canvas.height = rect.height * devicePixelRatio;
+      canvas.style.width = rect.width + 'px';
+      canvas.style.height = rect.height + 'px';
+    }
+    function resizeAll() {
+      [canvasTop, canvasSide, canvasCreep, canvasStress].forEach(resizeCanvas);
+    }
+    window.addEventListener('resize', resizeAll);
+    setTimeout(resizeAll, 50);
+
+    // ── Force distribution across grid ──
+    // Each cell (r, c) gets a force based on its position in the contact patch
+    function getCellForce(t, r, c) {
+      const rows = state.rows;
+      const cols = state.cols;
+      // Normalized position [0, 1]
+      const nr = r / (rows - 1);  // 0=front, 1=rear
+      const nc = c / (cols - 1);  // 0=left, 1=right
+
+      let baseF;
+      switch (state.mode) {
+        case 'step':
+          baseF = t > 0.2 ? state.F0 : 0;
+          break;
+        case 'sine':
+          baseF = state.F0 * Math.sin(2 * Math.PI * state.omega * t);
+          break;
+        case 'ramp':
+          baseF = Math.min(state.F0, state.F0 * t / 2);
+          break;
+        case 'rolling': {
+          // Rolling contact: force depends on position along travel direction (column)
+          // Simulates a pressure distribution moving through the contact patch
+          const phase = (t * state.rollSpeed) % 1;  // cycling 0..1
+          // Parabolic pressure distribution centered at current phase
+          const dist = Math.abs(nc - phase);
+          const wrapped = Math.min(dist, 1 - dist);  // wrap around
+          const pressure = Math.max(0, 1 - (wrapped / 0.35) ** 2);
+          // Also varies by row: higher in center rows
+          const rowFactor = 1 - 2 * Math.abs(nr - 0.5);
+          baseF = state.F0 * pressure * (0.5 + 0.5 * rowFactor);
+          break;
+        }
+        default:
+          baseF = state.F0;
+      }
+
+      // Spatial distribution: elliptical pressure for step/sine/ramp modes
+      if (state.mode !== 'rolling') {
+        // Elliptical contact patch pressure distribution
+        const dr = 2 * nr - 1;  // [-1, 1]
+        const dc = 2 * nc - 1;  // [-1, 1]
+        const ellipse = Math.max(0, 1 - dr * dr - dc * dc * 0.5);
+        return baseF * (0.3 + 0.7 * ellipse);
+      }
+      return baseF;
+    }
+
+    // ── Physics step for entire grid ──
+    function stepPhysics(dt) {
+      if (!state.running) return;
+      const realDt = dt * state.speed;
+      state.time += realDt;
+
+      const E = state.E;
+      const eta = state.eta;
+      let totalStrain = 0;
+      let totalForce = 0;
+      let count = 0;
+
+      for (let r = 0; r < state.rows; r++) {
+        // Ensure grid row exists (in case of resize)
+        if (!state.grid[r]) {
+          state.grid[r] = [];
+        }
+        for (let c = 0; c < state.cols; c++) {
+          if (!state.grid[r][c]) {
+            state.grid[r][c] = { strain: 0, strainRate: 0 };
+          }
+          const cell = state.grid[r][c];
+          const F = getCellForce(state.time, r, c);
+
+          // Kelvin-Voigt per cell: F = E*strain + eta*strainRate
+          cell.strainRate = (F - E * cell.strain) / eta;
+          cell.strain += cell.strainRate * realDt;
+
+          totalStrain += cell.strain;
+          totalForce += F;
+          count++;
+        }
+      }
+
+      // Center cell for stress-strain curve
+      const cr = Math.floor(state.rows / 2);
+      const cc = Math.floor(state.cols / 2);
+      const centerCell = state.grid[cr] && state.grid[cr][cc]
+        ? state.grid[cr][cc] : { strain: 0, strainRate: 0 };
+      const centerStress = E * centerCell.strain + eta * centerCell.strainRate;
+
+      state.history.push({
+        t: state.time,
+        avgStrain: totalStrain / count,
+        centerStrain: centerCell.strain,
+        centerStress: centerStress,
+        avgForce: totalForce / count,
+      });
+      if (state.history.length > state.maxHistory) {
+        state.history.shift();
+      }
+    }
+
+    // ── Drawing helpers ──
+    function clearCanvas(ctx, canvas) {
+      ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+      const w = canvas.width / devicePixelRatio;
+      const h = canvas.height / devicePixelRatio;
+      ctx.clearRect(0, 0, w, h);
+      return { w, h };
+    }
+
+    // ── Strain-to-color mapping ──
+    function strainColor(strain) {
+      const abs = Math.min(Math.abs(strain), 0.3);
+      const t = abs / 0.3;  // normalize to [0, 1]
+      if (strain >= 0) {
+        // Blue to yellow to red
+        const r = Math.floor(40 + 215 * t);
+        const g = Math.floor(60 + 140 * Math.min(t * 2, 1) - 100 * Math.max(0, t - 0.5));
+        const b = Math.floor(180 * (1 - t));
+        return `rgb(${r},${g},${b})`;
+      } else {
+        // Blue shades for negative
+        const r = Math.floor(30 + 40 * t);
+        const g = Math.floor(80 + 80 * t);
+        const b = Math.floor(180 + 75 * t);
+        return `rgb(${r},${g},${b})`;
+      }
+    }
+
+    // ── Draw Top View (Grid heatmap) ──
+    function drawTopView() {
+      const { w, h } = clearCanvas(ctxT, canvasTop);
+      const pad = { l: 40, r: 20, t: 28, b: 30 };
+      const gw = w - pad.l - pad.r;
+      const gh = h - pad.t - pad.b;
+
+      const rows = state.rows;
+      const cols = state.cols;
+      const cellW = gw / cols;
+      const cellH = gh / rows;
+
+      // Draw grid cells
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const cell = state.grid[r] && state.grid[r][c]
+            ? state.grid[r][c] : { strain: 0 };
+          const x = pad.l + c * cellW;
+          const y = pad.t + r * cellH;
+
+          // Cell fill: strain magnitude mapped to color
+          ctxT.fillStyle = strainColor(cell.strain);
+          ctxT.fillRect(x + 1, y + 1, cellW - 2, cellH - 2);
+
+          // Cell border
+          ctxT.strokeStyle = '#0f3460';
+          ctxT.lineWidth = 1;
+          ctxT.strokeRect(x, y, cellW, cellH);
+
+          // Deflection arrow inside cell
+          const deflect = cell.strain * 20;
+          if (Math.abs(deflect) > 0.5) {
+            ctxT.strokeStyle = 'rgba(255,255,255,0.6)';
+            ctxT.lineWidth = 1.5;
+            const cx = x + cellW / 2;
+            const cy = y + cellH / 2;
+            ctxT.beginPath();
+            ctxT.moveTo(cx, cy);
+            ctxT.lineTo(cx + deflect, cy);
+            ctxT.stroke();
+            // Mini arrowhead
+            const dir = deflect > 0 ? 1 : -1;
+            ctxT.beginPath();
+            ctxT.moveTo(cx + deflect, cy);
+            ctxT.lineTo(cx + deflect - 3 * dir, cy - 2);
+            ctxT.lineTo(cx + deflect - 3 * dir, cy + 2);
+            ctxT.closePath();
+            ctxT.fillStyle = 'rgba(255,255,255,0.6)';
+            ctxT.fill();
+          }
+        }
+      }
+
+      // Row/col labels
+      ctxT.fillStyle = '#888';
+      ctxT.font = '10px sans-serif';
+      for (let r = 0; r < rows; r++) {
+        ctxT.fillText(`r${r}`, 5, pad.t + r * cellH + cellH / 2 + 3);
+      }
+      for (let c = 0; c < cols; c++) {
+        ctxT.fillText(`c${c}`, pad.l + c * cellW + cellW / 2 - 6, h - 8);
+      }
+
+      // Colorbar
+      const barX = w - 15;
+      const barH = gh * 0.6;
+      const barY = pad.t + (gh - barH) / 2;
+      for (let i = 0; i < barH; i++) {
+        const s = 0.3 * (1 - i / barH);
+        ctxT.fillStyle = strainColor(s);
+        ctxT.fillRect(barX, barY + i, 10, 1);
+      }
+      ctxT.fillStyle = '#888';
+      ctxT.font = '9px sans-serif';
+      ctxT.fillText('+ε', barX - 2, barY - 4);
+      ctxT.fillText('0', barX + 1, barY + barH + 10);
+
+      // Grid info
+      ctxT.fillStyle = '#53d8fb';
+      ctxT.font = '11px sans-serif';
+      ctxT.fillText(`격자: ${rows}×${cols} = ${rows * cols}셀`, pad.l, h - 8);
+    }
+
+    // ── Draw Side View (Bristle deformation from one row) ──
+    function drawSideView() {
+      const { w, h } = clearCanvas(ctxSd, canvasSide);
+      const pad = { l: 30, r: 20, t: 28, b: 25 };
+      const gw = w - pad.l - pad.r;
+      const gh = h - pad.t - pad.b;
+
+      const rows = state.rows;
+      const cols = state.cols;
+      const len = state.bristleLen;
+
+      // Draw multiple rows with perspective offset
+      const rowSpacing = Math.min(gh / (rows + 1), 60);
+      const colSpacing = gw / (cols + 1);
+
+      for (let r = 0; r < rows; r++) {
+        const baseY = pad.t + 15 + r * rowSpacing;
+        const alpha = 1 - r * 0.12;  // fade back rows
+
+        // Draw brush body for this row
+        const bodyX = pad.l;
+        const bodyW = gw;
+        ctxSd.fillStyle = `rgba(61,90,128,${alpha * 0.5})`;
+        ctxSd.fillRect(bodyX, baseY - 3, bodyW, 6);
+
+        // Row label
+        ctxSd.fillStyle = `rgba(136,136,136,${alpha})`;
+        ctxSd.font = '9px sans-serif';
+        ctxSd.fillText(`r${r}`, 5, baseY + 3);
+
+        // Draw bristles for this row
+        for (let c = 0; c < cols; c++) {
+          const cell = state.grid[r] && state.grid[r][c]
+            ? state.grid[r][c] : { strain: 0 };
+          const x = pad.l + (c + 0.5) * colSpacing;
+          const deflection = cell.strain * 30;
+
+          // Bristle as quadratic curve
+          ctxSd.strokeStyle = strainColor(cell.strain);
+          ctxSd.globalAlpha = alpha;
+          ctxSd.lineWidth = 2;
+          ctxSd.lineCap = 'round';
+          ctxSd.beginPath();
+          ctxSd.moveTo(x, baseY + 3);
+          ctxSd.quadraticCurveTo(
+            x + deflection * 0.5, baseY + 3 + len * 0.6,
+            x + deflection, baseY + 3 + len
+          );
+          ctxSd.stroke();
+
+          // Bristle tip
+          ctxSd.fillStyle = strainColor(cell.strain);
+          ctxSd.beginPath();
+          ctxSd.arc(x + deflection, baseY + 3 + len, 2, 0, Math.PI * 2);
+          ctxSd.fill();
+          ctxSd.globalAlpha = 1;
+        }
+      }
+
+      // Surface line
+      const surfY = pad.t + 15 + (rows - 1) * rowSpacing + len + 20;
+      if (surfY < h - 5) {
+        ctxSd.strokeStyle = '#555';
+        ctxSd.lineWidth = 1.5;
+        ctxSd.setLineDash([5, 3]);
+        ctxSd.beginPath();
+        ctxSd.moveTo(pad.l, surfY);
+        ctxSd.lineTo(pad.l + gw, surfY);
+        ctxSd.stroke();
+        ctxSd.setLineDash([]);
+        ctxSd.fillStyle = '#555';
+        ctxSd.font = '10px sans-serif';
+        ctxSd.fillText('접촉면', w - 50, surfY + 12);
+      }
+
+      // Info
+      ctxSd.fillStyle = '#53d8fb';
+      ctxSd.font = '11px sans-serif';
+      ctxSd.fillText(`t = ${state.time.toFixed(2)}s`, pad.l, h - 6);
+    }
+
+    // ── Draw Graph Helper ──
+    function drawGraph(ctx, canvas, data, xKey, yKey, xLabel, yLabel, color, extraSeries) {
+      const { w, h } = clearCanvas(ctx, canvas);
+      const pad = { l: 52, r: 12, t: 28, b: 32 };
+      const gw = w - pad.l - pad.r;
+      const gh = h - pad.t - pad.b;
+
+      if (data.length < 2) {
+        ctx.fillStyle = '#555';
+        ctx.font = '12px sans-serif';
+        ctx.fillText('▶ 시작 버튼으로 시뮬레이션', w / 2 - 80, h / 2);
+        return;
+      }
+
+      let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
+      for (const d of data) {
+        if (d[xKey] < xMin) xMin = d[xKey];
+        if (d[xKey] > xMax) xMax = d[xKey];
+        if (d[yKey] < yMin) yMin = d[yKey];
+        if (d[yKey] > yMax) yMax = d[yKey];
+        if (extraSeries) {
+          for (const s of extraSeries) {
+            if (d[s.key] < yMin) yMin = d[s.key];
+            if (d[s.key] > yMax) yMax = d[s.key];
+          }
+        }
+      }
+      const yPad = (yMax - yMin) * 0.1 || 0.5;
+      yMin -= yPad; yMax += yPad;
+      const xPad = (xMax - xMin) * 0.02 || 0.1;
+      xMin -= xPad; xMax += xPad;
+
+      const scaleX = v => pad.l + (v - xMin) / (xMax - xMin) * gw;
+      const scaleY = v => pad.t + gh - (v - yMin) / (yMax - yMin) * gh;
+
+      // Grid
+      ctx.strokeStyle = '#2a2a4a';
+      ctx.lineWidth = 0.5;
+      for (let i = 0; i <= 4; i++) {
+        const y = pad.t + gh * i / 4;
+        ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + gw, y); ctx.stroke();
+        const val = yMax - (yMax - yMin) * i / 4;
+        ctx.fillStyle = '#666';
+        ctx.font = '9px sans-serif';
+        ctx.fillText(val.toFixed(3), 4, y + 3);
+      }
+      for (let i = 0; i <= 4; i++) {
+        const x = pad.l + gw * i / 4;
+        ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + gh); ctx.stroke();
+        const val = xMin + (xMax - xMin) * i / 4;
+        ctx.fillStyle = '#666';
+        ctx.fillText(val.toFixed(1), x - 8, h - 8);
+      }
+
+      // Axis labels
+      ctx.fillStyle = '#888';
+      ctx.font = '10px sans-serif';
+      ctx.fillText(xLabel, w / 2 - 15, h - 1);
+      ctx.save();
+      ctx.translate(10, h / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.fillText(yLabel, -15, 0);
+      ctx.restore();
+
+      // Main series
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i < data.length; i++) {
+        const x = scaleX(data[i][xKey]);
+        const y = scaleY(data[i][yKey]);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      // Extra series
+      if (extraSeries) {
+        for (const s of extraSeries) {
+          ctx.strokeStyle = s.color;
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash(s.dash || []);
+          ctx.beginPath();
+          for (let i = 0; i < data.length; i++) {
+            const x = scaleX(data[i][xKey]);
+            const y = scaleY(data[i][s.key]);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        // Legend
+        let lx = pad.l + 8;
+        const ly = pad.t + 14;
+        ctx.fillStyle = color;
+        ctx.fillRect(lx, ly - 4, 12, 3);
+        ctx.fillStyle = '#aaa';
+        ctx.font = '9px sans-serif';
+        ctx.fillText(yLabel, lx + 15, ly);
+        lx += 65;
+        for (const s of extraSeries) {
+          ctx.fillStyle = s.color;
+          ctx.fillRect(lx, ly - 4, 12, 3);
+          ctx.fillStyle = '#aaa';
+          ctx.fillText(s.label, lx + 15, ly);
+          lx += 65;
+        }
+      }
+    }
+
+    function drawCreep() {
+      drawGraph(ctxC, canvasCreep, state.history, 't', 'avgStrain',
+        '시간 (s)', '평균 변형률 ε', '#53d8fb',
+        [{ key: 'avgForce', color: '#ffd700', label: '평균 하중 F', dash: [4, 3] }]
+      );
+    }
+
+    function drawStressStrain() {
+      drawGraph(ctxS, canvasStress, state.history, 'centerStrain', 'centerStress',
+        '변형률 ε', '응력 σ (중심셀)', '#e94560');
+    }
+
+    // ── Animation Loop ──
+    let lastTime = 0;
+    function animate(timestamp) {
+      const dt = Math.min((timestamp - lastTime) / 1000, 0.05);
+      lastTime = timestamp;
+
+      stepPhysics(dt);
+      drawTopView();
+      drawSideView();
+      drawCreep();
+      drawStressStrain();
+
+      requestAnimationFrame(animate);
+    }
+
+    resizeAll();
+    requestAnimationFrame(animate);
+  </script>
+</body>
+</html>
