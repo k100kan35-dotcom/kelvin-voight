@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kelvin-Voigt 2D Brush 모델 시각화</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', Tahoma, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      overflow-x: hidden;
+    }
+    header {
+      text-align: center;
+      padding: 20px;
+      background: #16213e;
+      border-bottom: 2px solid #0f3460;
+    }
+    header h1 { font-size: 1.6em; color: #e94560; }
+    header p { font-size: 0.9em; color: #aaa; margin-top: 5px; }
+
+    .main-container {
+      display: grid;
+      grid-template-columns: 300px 1fr;
+      gap: 0;
+      min-height: calc(100vh - 80px);
+    }
+
+    /* Control Panel */
+    .controls {
+      background: #16213e;
+      padding: 20px;
+      overflow-y: auto;
+      max-height: calc(100vh - 80px);
+      border-right: 2px solid #0f3460;
+    }
+    .control-group {
+      margin-bottom: 18px;
+      background: #1a1a2e;
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid #0f3460;
+    }
+    .control-group h3 {
+      font-size: 0.85em;
+      color: #e94560;
+      margin-bottom: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .control-row {
+      margin-bottom: 8px;
+    }
+    .control-row label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.8em;
+      margin-bottom: 3px;
+      color: #ccc;
+    }
+    .control-row label span.val {
+      color: #53d8fb;
+      font-weight: bold;
+    }
+    input[type="range"] {
+      width: 100%;
+      accent-color: #e94560;
+      cursor: pointer;
+    }
+    .info-box {
+      background: #0f3460;
+      padding: 10px;
+      border-radius: 6px;
+      font-size: 0.75em;
+      line-height: 1.5;
+      color: #bbb;
+      margin-top: 10px;
+    }
+    .info-box strong { color: #53d8fb; }
+
+    /* Visualization Area */
+    .viz-area {
+      display: grid;
+      grid-template-rows: 1fr 1fr;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      padding: 8px;
+      background: #1a1a2e;
+    }
+    .viz-panel {
+      background: #16213e;
+      border-radius: 8px;
+      border: 1px solid #0f3460;
+      position: relative;
+      overflow: hidden;
+    }
+    .viz-panel canvas {
+      width: 100%;
+      height: 100%;
+    }
+    .viz-panel .panel-title {
+      position: absolute;
+      top: 6px;
+      left: 10px;
+      font-size: 0.75em;
+      color: #e94560;
+      font-weight: bold;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    /* Buttons */
+    .btn-row {
+      display: flex;
+      gap: 6px;
+      margin-top: 10px;
+    }
+    button {
+      flex: 1;
+      padding: 8px;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.8em;
+      cursor: pointer;
+      font-weight: bold;
+      transition: background 0.2s;
+    }
+    .btn-start { background: #27ae60; color: #fff; }
+    .btn-start:hover { background: #2ecc71; }
+    .btn-stop { background: #e94560; color: #fff; }
+    .btn-stop:hover { background: #ff6b81; }
+    .btn-reset { background: #0f3460; color: #fff; }
+    .btn-reset:hover { background: #1a5276; }
+
+    /* Load mode selector */
+    .mode-selector {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 10px;
+    }
+    .mode-btn {
+      flex: 1;
+      padding: 6px;
+      border: 2px solid #0f3460;
+      background: transparent;
+      color: #aaa;
+      border-radius: 6px;
+      font-size: 0.7em;
+      cursor: pointer;
+    }
+    .mode-btn.active {
+      background: #0f3460;
+      color: #53d8fb;
+      border-color: #53d8fb;
+    }
+
+    @media (max-width: 900px) {
+      .main-container {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr;
+      }
+      .controls {
+        max-height: none;
+        border-right: none;
+        border-bottom: 2px solid #0f3460;
+      }
+      .viz-area {
+        min-height: 80vh;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Kelvin-Voigt 2D Brush 모델 시각화</h1>
+    <p>스프링(탄성) + 대시팟(점성)의 병렬 결합 | 변수를 조절하여 동작 변화를 관찰하세요</p>
+  </header>
+
+  <div class="main-container">
+    <!-- Controls -->
+    <div class="controls">
+      <div class="control-group">
+        <h3>모델 파라미터</h3>
+        <div class="control-row">
+          <label>탄성계수 E (스프링) <span class="val" id="valE">50</span> N/m</label>
+          <input type="range" id="sliderE" min="5" max="200" value="50" step="1">
+        </div>
+        <div class="control-row">
+          <label>점성계수 η (대시팟) <span class="val" id="valEta">30</span> N·s/m</label>
+          <input type="range" id="sliderEta" min="1" max="100" value="30" step="1">
+        </div>
+        <div class="control-row">
+          <label>브러시 강성 k_b <span class="val" id="valKb">40</span> N/m</label>
+          <input type="range" id="sliderKb" min="5" max="150" value="40" step="1">
+        </div>
+      </div>
+
+      <div class="control-group">
+        <h3>하중 조건</h3>
+        <div class="mode-selector">
+          <button class="mode-btn active" data-mode="step" id="modeStep">계단 하중</button>
+          <button class="mode-btn" data-mode="sine" id="modeSine">사인파 하중</button>
+          <button class="mode-btn" data-mode="ramp" id="modeRamp">경사 하중</button>
+        </div>
+        <div class="control-row">
+          <label>하중 크기 F₀ <span class="val" id="valF">5.0</span> N</label>
+          <input type="range" id="sliderF" min="0.5" max="15" value="5" step="0.1">
+        </div>
+        <div class="control-row" id="freqRow">
+          <label>주파수 ω (사인파) <span class="val" id="valOmega">1.0</span> Hz</label>
+          <input type="range" id="sliderOmega" min="0.1" max="5" value="1" step="0.1">
+        </div>
+      </div>
+
+      <div class="control-group">
+        <h3>브러시 설정</h3>
+        <div class="control-row">
+          <label>브리슬 개수 <span class="val" id="valN">12</span></label>
+          <input type="range" id="sliderN" min="3" max="30" value="12" step="1">
+        </div>
+        <div class="control-row">
+          <label>브리슬 길이 <span class="val" id="valLen">80</span> px</label>
+          <input type="range" id="sliderLen" min="30" max="150" value="80" step="1">
+        </div>
+      </div>
+
+      <div class="control-group">
+        <h3>시뮬레이션</h3>
+        <div class="control-row">
+          <label>시간 배속 <span class="val" id="valSpeed">1.0</span>x</label>
+          <input type="range" id="sliderSpeed" min="0.1" max="3" value="1" step="0.1">
+        </div>
+        <div class="btn-row">
+          <button class="btn-start" id="btnStart">▶ 시작</button>
+          <button class="btn-stop" id="btnStop">■ 정지</button>
+          <button class="btn-reset" id="btnReset">↺ 리셋</button>
+        </div>
+      </div>
+
+      <div class="control-group">
+        <h3>개념 설명</h3>
+        <div class="info-box">
+          <strong>Kelvin-Voigt 모델</strong>은 스프링과 대시팟이 <strong>병렬</strong>로 연결된 점탄성 모델입니다.<br><br>
+          <strong>σ = Eε + η(dε/dt)</strong><br><br>
+          • <strong>E (탄성계수)</strong>: 높을수록 빳빳한 브러시<br>
+          • <strong>η (점성계수)</strong>: 높을수록 느리게 복원<br>
+          • <strong>크리프</strong>: 일정 하중 → 서서히 변형<br>
+          • <strong>복원</strong>: 하중 제거 → 서서히 원래로<br><br>
+          변형: ε(t) = (σ₀/E)(1 - e^(-Et/η))
+        </div>
+      </div>
+    </div>
+
+    <!-- Visualization -->
+    <div class="viz-area">
+      <div class="viz-panel" id="panelBrush">
+        <div class="panel-title">2D 브러시 변형</div>
+        <canvas id="canvasBrush"></canvas>
+      </div>
+      <div class="viz-panel" id="panelModel">
+        <div class="panel-title">Kelvin-Voigt 모델 다이어그램</div>
+        <canvas id="canvasModel"></canvas>
+      </div>
+      <div class="viz-panel" id="panelCreep">
+        <div class="panel-title">크리프 응답 (변형-시간)</div>
+        <canvas id="canvasCreep"></canvas>
+      </div>
+      <div class="viz-panel" id="panelStress">
+        <div class="panel-title">응력-변형률 곡선</div>
+        <canvas id="canvasStress"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ── State ──
+    const state = {
+      E: 50, eta: 30, kb: 40,
+      F0: 5, omega: 1,
+      nBristles: 12, bristleLen: 80,
+      speed: 1,
+      mode: 'step',
+      running: false,
+      time: 0,
+      strain: 0,
+      strainRate: 0,
+      history: [],       // {t, strain, stress, force}
+      maxHistory: 600,
+    };
+
+    // ── DOM refs ──
+    const $ = id => document.getElementById(id);
+    const canvasBrush = $('canvasBrush');
+    const canvasModel = $('canvasModel');
+    const canvasCreep = $('canvasCreep');
+    const canvasStress = $('canvasStress');
+    const ctxB = canvasBrush.getContext('2d');
+    const ctxM = canvasModel.getContext('2d');
+    const ctxC = canvasCreep.getContext('2d');
+    const ctxS = canvasStress.getContext('2d');
+
+    // ── Slider bindings ──
+    function bindSlider(sliderId, valId, stateKey, parser = parseFloat) {
+      const slider = $(sliderId);
+      const valEl = $(valId);
+      slider.addEventListener('input', () => {
+        state[stateKey] = parser(slider.value);
+        valEl.textContent = slider.value;
+      });
+    }
+    bindSlider('sliderE', 'valE', 'E');
+    bindSlider('sliderEta', 'valEta', 'eta');
+    bindSlider('sliderKb', 'valKb', 'kb');
+    bindSlider('sliderF', 'valF', 'F0');
+    bindSlider('sliderOmega', 'valOmega', 'omega');
+    bindSlider('sliderN', 'valN', 'nBristles', parseInt);
+    bindSlider('sliderLen', 'valLen', 'bristleLen', parseInt);
+    bindSlider('sliderSpeed', 'valSpeed', 'speed');
+
+    // Mode buttons
+    document.querySelectorAll('.mode-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        state.mode = btn.dataset.mode;
+        $('freqRow').style.display = state.mode === 'sine' ? 'block' : 'none';
+      });
+    });
+    $('freqRow').style.display = 'none';
+
+    // Buttons
+    $('btnStart').addEventListener('click', () => { state.running = true; });
+    $('btnStop').addEventListener('click', () => { state.running = false; });
+    $('btnReset').addEventListener('click', () => {
+      state.running = false;
+      state.time = 0;
+      state.strain = 0;
+      state.strainRate = 0;
+      state.history = [];
+    });
+
+    // ── Resize canvases ──
+    function resizeCanvas(canvas) {
+      const rect = canvas.parentElement.getBoundingClientRect();
+      canvas.width = rect.width * devicePixelRatio;
+      canvas.height = rect.height * devicePixelRatio;
+      canvas.style.width = rect.width + 'px';
+      canvas.style.height = rect.height + 'px';
+    }
+    function resizeAll() {
+      [canvasBrush, canvasModel, canvasCreep, canvasStress].forEach(resizeCanvas);
+    }
+    window.addEventListener('resize', resizeAll);
+    setTimeout(resizeAll, 50);
+
+    // ── Physics ──
+    function getForce(t) {
+      switch (state.mode) {
+        case 'step': return t > 0.2 ? state.F0 : 0;
+        case 'sine': return state.F0 * Math.sin(2 * Math.PI * state.omega * t);
+        case 'ramp': return Math.min(state.F0, state.F0 * t / 2);
+        default: return state.F0;
+      }
+    }
+
+    function stepPhysics(dt) {
+      if (!state.running) return;
+      const realDt = dt * state.speed;
+      state.time += realDt;
+
+      const F = getForce(state.time);
+      const E = state.E;
+      const eta = state.eta;
+
+      // Kelvin-Voigt: F = E*strain + eta*strainRate
+      // => strainRate = (F - E*strain) / eta
+      state.strainRate = (F - E * state.strain) / eta;
+      state.strain += state.strainRate * realDt;
+
+      const stress = E * state.strain + eta * state.strainRate;
+
+      state.history.push({
+        t: state.time,
+        strain: state.strain,
+        stress: stress,
+        force: F
+      });
+      if (state.history.length > state.maxHistory) {
+        state.history.shift();
+      }
+    }
+
+    // ── Drawing helpers ──
+    function clearCanvas(ctx, canvas) {
+      ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+      const w = canvas.width / devicePixelRatio;
+      const h = canvas.height / devicePixelRatio;
+      ctx.clearRect(0, 0, w, h);
+      return { w, h };
+    }
+
+    // ── Draw Brush ──
+    function drawBrush() {
+      const { w, h } = clearCanvas(ctxB, canvasBrush);
+      const cx = w / 2;
+      const baseY = 50;
+      const n = state.nBristles;
+      const len = state.bristleLen;
+      const deflection = state.strain * 30; // scale for visual
+
+      // Draw brush body (handle)
+      ctxB.fillStyle = '#3d5a80';
+      const handleW = Math.max(60, n * 8);
+      ctxB.beginPath();
+      ctxB.roundRect(cx - handleW / 2, baseY - 30, handleW, 30, 4);
+      ctxB.fill();
+      ctxB.fillStyle = '#5a7da8';
+      ctxB.fillRect(cx - handleW / 3, baseY - 45, handleW * 2 / 3, 18);
+
+      // Draw bristles
+      const spacing = (handleW - 10) / (n - 1);
+      const startX = cx - handleW / 2 + 5;
+
+      for (let i = 0; i < n; i++) {
+        const x = startX + i * spacing;
+        const tipDeflect = deflection * (1 + 0.15 * Math.sin(i * 1.3));
+
+        // Each bristle bends as a curve
+        ctxB.strokeStyle = `hsl(${40 + i * 3}, 70%, ${55 + (i % 3) * 5}%)`;
+        ctxB.lineWidth = 2;
+        ctxB.lineCap = 'round';
+        ctxB.beginPath();
+        ctxB.moveTo(x, baseY);
+        // Quadratic curve for bending
+        ctxB.quadraticCurveTo(
+          x + tipDeflect * 0.5, baseY + len * 0.6,
+          x + tipDeflect, baseY + len
+        );
+        ctxB.stroke();
+
+        // Bristle tip dot
+        ctxB.fillStyle = `hsl(${40 + i * 3}, 80%, 65%)`;
+        ctxB.beginPath();
+        ctxB.arc(x + tipDeflect, baseY + len, 2, 0, Math.PI * 2);
+        ctxB.fill();
+      }
+
+      // Draw surface
+      const surfY = baseY + len + 25;
+      ctxB.strokeStyle = '#555';
+      ctxB.lineWidth = 2;
+      ctxB.setLineDash([6, 3]);
+      ctxB.beginPath();
+      ctxB.moveTo(20, surfY);
+      ctxB.lineTo(w - 20, surfY);
+      ctxB.stroke();
+      ctxB.setLineDash([]);
+      ctxB.fillStyle = '#444';
+      ctxB.font = '11px sans-serif';
+      ctxB.fillText('접촉면', w - 60, surfY + 15);
+
+      // Force arrow
+      const F = getForce(state.time);
+      if (Math.abs(F) > 0.01) {
+        const arrowX = cx + handleW / 2 + 20;
+        const arrowLen = Math.min(60, Math.abs(F) * 8);
+        const dir = F > 0 ? 1 : -1;
+        ctxB.strokeStyle = '#e94560';
+        ctxB.fillStyle = '#e94560';
+        ctxB.lineWidth = 3;
+        ctxB.beginPath();
+        ctxB.moveTo(arrowX, baseY);
+        ctxB.lineTo(arrowX + arrowLen * dir, baseY);
+        ctxB.stroke();
+        // Arrowhead
+        ctxB.beginPath();
+        ctxB.moveTo(arrowX + arrowLen * dir, baseY);
+        ctxB.lineTo(arrowX + (arrowLen - 8) * dir, baseY - 5);
+        ctxB.lineTo(arrowX + (arrowLen - 8) * dir, baseY + 5);
+        ctxB.closePath();
+        ctxB.fill();
+        ctxB.font = 'bold 12px sans-serif';
+        ctxB.fillText(`F = ${F.toFixed(1)} N`, arrowX + arrowLen * dir + 5 * dir, baseY - 8);
+      }
+
+      // Strain info
+      ctxB.fillStyle = '#53d8fb';
+      ctxB.font = '12px sans-serif';
+      ctxB.fillText(`변형률 ε = ${state.strain.toFixed(4)}`, 15, h - 30);
+      ctxB.fillText(`시간 t = ${state.time.toFixed(2)} s`, 15, h - 12);
+    }
+
+    // ── Draw Model Diagram ──
+    function drawModel() {
+      const { w, h } = clearCanvas(ctxM, canvasModel);
+
+      const leftX = 50;
+      const rightX = w - 50;
+      const midY = h / 2;
+      const stretch = state.strain * 40;
+
+      // Connection points
+      const wallL = leftX;
+      const wallR = rightX;
+      const springMidX = (wallL + wallR) / 2 + stretch / 2;
+
+      // Left wall
+      ctxM.strokeStyle = '#888';
+      ctxM.lineWidth = 3;
+      ctxM.beginPath();
+      ctxM.moveTo(wallL, midY - 60);
+      ctxM.lineTo(wallL, midY + 60);
+      ctxM.stroke();
+      // Hatching
+      for (let y = midY - 60; y < midY + 60; y += 10) {
+        ctxM.beginPath();
+        ctxM.moveTo(wallL, y);
+        ctxM.lineTo(wallL - 10, y + 10);
+        ctxM.stroke();
+      }
+
+      // Top branch: SPRING
+      const springY = midY - 30;
+      ctxM.strokeStyle = '#53d8fb';
+      ctxM.lineWidth = 2;
+      // Left line to spring start
+      const springStart = wallL + 40;
+      const springEnd = springMidX + 20;
+      ctxM.beginPath();
+      ctxM.moveTo(wallL, springY);
+      ctxM.lineTo(springStart, springY);
+      ctxM.stroke();
+
+      // Draw zigzag spring
+      const nCoils = 8;
+      const springLen = springEnd - springStart;
+      const coilW = springLen / nCoils;
+      const coilAmp = 12;
+      ctxM.beginPath();
+      ctxM.moveTo(springStart, springY);
+      for (let i = 0; i < nCoils; i++) {
+        const x1 = springStart + coilW * (i + 0.25);
+        const x2 = springStart + coilW * (i + 0.75);
+        const x3 = springStart + coilW * (i + 1);
+        ctxM.lineTo(x1, springY - coilAmp);
+        ctxM.lineTo(x2, springY + coilAmp);
+        ctxM.lineTo(x3, springY);
+      }
+      ctxM.stroke();
+
+      // Spring to right
+      ctxM.beginPath();
+      ctxM.moveTo(springEnd, springY);
+      ctxM.lineTo(wallR, springY);
+      ctxM.stroke();
+
+      // Spring label
+      ctxM.fillStyle = '#53d8fb';
+      ctxM.font = 'bold 13px sans-serif';
+      ctxM.fillText(`E = ${state.E}`, (springStart + springEnd) / 2 - 20, springY - 18);
+
+      // Bottom branch: DASHPOT
+      const dashY = midY + 30;
+      ctxM.strokeStyle = '#e94560';
+      ctxM.lineWidth = 2;
+
+      const dashStart = wallL + 40;
+      const dashEnd = springMidX + 20;
+      const dashCx = (dashStart + dashEnd) / 2;
+      const pistonW = 40;
+      const pistonH = 20;
+
+      // Left line
+      ctxM.beginPath();
+      ctxM.moveTo(wallL, dashY);
+      ctxM.lineTo(dashStart, dashY);
+      ctxM.stroke();
+
+      // Cylinder
+      ctxM.strokeStyle = '#e94560';
+      ctxM.strokeRect(dashCx - pistonW / 2, dashY - pistonH / 2, pistonW, pistonH);
+
+      // Lines to cylinder
+      ctxM.beginPath();
+      ctxM.moveTo(dashStart, dashY);
+      ctxM.lineTo(dashCx - pistonW / 2, dashY);
+      ctxM.stroke();
+
+      // Piston rod from left
+      const pistonX = dashCx - pistonW / 4 + stretch * 0.3;
+      ctxM.lineWidth = 3;
+      ctxM.beginPath();
+      ctxM.moveTo(dashCx + pistonW / 2, dashY);
+      ctxM.lineTo(wallR, dashY);
+      ctxM.stroke();
+
+      // Piston inside
+      ctxM.fillStyle = 'rgba(233,69,96,0.4)';
+      const pistonFill = Math.max(0, Math.min(pistonW - 4, pistonW / 2 + stretch * 0.5));
+      ctxM.fillRect(dashCx - pistonW / 2 + 2, dashY - pistonH / 2 + 2, pistonFill, pistonH - 4);
+
+      // Dashpot label
+      ctxM.fillStyle = '#e94560';
+      ctxM.font = 'bold 13px sans-serif';
+      ctxM.fillText(`η = ${state.eta}`, dashCx - 20, dashY + pistonH / 2 + 18);
+
+      // Vertical connections on right
+      ctxM.strokeStyle = '#888';
+      ctxM.lineWidth = 2;
+      ctxM.beginPath();
+      ctxM.moveTo(wallR, springY);
+      ctxM.lineTo(wallR, dashY);
+      ctxM.stroke();
+
+      // Vertical connections on left
+      ctxM.beginPath();
+      ctxM.moveTo(wallL, springY);
+      ctxM.lineTo(wallL, dashY);
+      ctxM.stroke();
+
+      // Force arrow on right
+      const F = getForce(state.time);
+      if (Math.abs(F) > 0.01) {
+        ctxM.strokeStyle = '#ffd700';
+        ctxM.fillStyle = '#ffd700';
+        ctxM.lineWidth = 3;
+        const aY = midY;
+        const aLen = Math.min(40, Math.abs(F) * 6);
+        ctxM.beginPath();
+        ctxM.moveTo(wallR, aY);
+        ctxM.lineTo(wallR + aLen, aY);
+        ctxM.stroke();
+        ctxM.beginPath();
+        ctxM.moveTo(wallR + aLen, aY);
+        ctxM.lineTo(wallR + aLen - 6, aY - 4);
+        ctxM.lineTo(wallR + aLen - 6, aY + 4);
+        ctxM.closePath();
+        ctxM.fill();
+        ctxM.font = '11px sans-serif';
+        ctxM.fillText(`F`, wallR + aLen + 4, aY + 4);
+      }
+
+      // Title
+      ctxM.fillStyle = '#888';
+      ctxM.font = '11px sans-serif';
+      ctxM.fillText('병렬 결합 (Parallel)', w / 2 - 45, h - 12);
+    }
+
+    // ── Draw Graph Helper ──
+    function drawGraph(ctx, canvas, data, xKey, yKey, xLabel, yLabel, color, extraSeries) {
+      const { w, h } = clearCanvas(ctx, canvas);
+      const pad = { l: 55, r: 15, t: 30, b: 35 };
+      const gw = w - pad.l - pad.r;
+      const gh = h - pad.t - pad.b;
+
+      if (data.length < 2) {
+        ctx.fillStyle = '#555';
+        ctx.font = '13px sans-serif';
+        ctx.fillText('시작 버튼을 눌러 데이터를 생성하세요', w / 2 - 110, h / 2);
+        return;
+      }
+
+      // Compute ranges
+      let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
+      for (const d of data) {
+        if (d[xKey] < xMin) xMin = d[xKey];
+        if (d[xKey] > xMax) xMax = d[xKey];
+        if (d[yKey] < yMin) yMin = d[yKey];
+        if (d[yKey] > yMax) yMax = d[yKey];
+        if (extraSeries) {
+          for (const s of extraSeries) {
+            if (d[s.key] < yMin) yMin = d[s.key];
+            if (d[s.key] > yMax) yMax = d[s.key];
+          }
+        }
+      }
+      // Add padding to range
+      const yPad = (yMax - yMin) * 0.1 || 0.5;
+      yMin -= yPad; yMax += yPad;
+      const xPad = (xMax - xMin) * 0.02 || 0.1;
+      xMin -= xPad; xMax += xPad;
+
+      const scaleX = v => pad.l + (v - xMin) / (xMax - xMin) * gw;
+      const scaleY = v => pad.t + gh - (v - yMin) / (yMax - yMin) * gh;
+
+      // Grid
+      ctx.strokeStyle = '#2a2a4a';
+      ctx.lineWidth = 0.5;
+      for (let i = 0; i <= 4; i++) {
+        const y = pad.t + gh * i / 4;
+        ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + gw, y); ctx.stroke();
+        const val = yMax - (yMax - yMin) * i / 4;
+        ctx.fillStyle = '#666';
+        ctx.font = '10px sans-serif';
+        ctx.fillText(val.toFixed(3), 5, y + 4);
+      }
+      for (let i = 0; i <= 4; i++) {
+        const x = pad.l + gw * i / 4;
+        ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + gh); ctx.stroke();
+        const val = xMin + (xMax - xMin) * i / 4;
+        ctx.fillStyle = '#666';
+        ctx.font = '10px sans-serif';
+        ctx.fillText(val.toFixed(1), x - 10, h - 8);
+      }
+
+      // Axes labels
+      ctx.fillStyle = '#888';
+      ctx.font = '11px sans-serif';
+      ctx.fillText(xLabel, w / 2 - 10, h - 2);
+      ctx.save();
+      ctx.translate(12, h / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.fillText(yLabel, -15, 0);
+      ctx.restore();
+
+      // Plot main series
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i < data.length; i++) {
+        const x = scaleX(data[i][xKey]);
+        const y = scaleY(data[i][yKey]);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      // Extra series
+      if (extraSeries) {
+        for (const s of extraSeries) {
+          ctx.strokeStyle = s.color;
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash(s.dash || []);
+          ctx.beginPath();
+          for (let i = 0; i < data.length; i++) {
+            const x = scaleX(data[i][xKey]);
+            const y = scaleY(data[i][s.key]);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+      }
+
+      // Legend for extra series
+      if (extraSeries) {
+        let lx = pad.l + 10;
+        const ly = pad.t + 15;
+        // Main
+        ctx.fillStyle = color;
+        ctx.fillRect(lx, ly - 5, 15, 3);
+        ctx.fillStyle = '#aaa';
+        ctx.font = '10px sans-serif';
+        ctx.fillText(yLabel, lx + 18, ly);
+        lx += 70;
+        for (const s of extraSeries) {
+          ctx.fillStyle = s.color;
+          ctx.fillRect(lx, ly - 5, 15, 3);
+          ctx.fillStyle = '#aaa';
+          ctx.fillText(s.label, lx + 18, ly);
+          lx += 70;
+        }
+      }
+    }
+
+    // ── Draw Creep Graph ──
+    function drawCreep() {
+      drawGraph(ctxC, canvasCreep, state.history, 't', 'strain',
+        '시간 (s)', '변형률 ε', '#53d8fb',
+        [{ key: 'force', color: '#ffd700', label: '하중 F', dash: [4, 3] }]
+      );
+    }
+
+    // ── Draw Stress-Strain ──
+    function drawStressStrain() {
+      drawGraph(ctxS, canvasStress, state.history, 'strain', 'stress',
+        '변형률 ε', '응력 σ', '#e94560');
+    }
+
+    // ── Animation Loop ──
+    let lastTime = 0;
+    function animate(timestamp) {
+      const dt = Math.min((timestamp - lastTime) / 1000, 0.05);
+      lastTime = timestamp;
+
+      stepPhysics(dt);
+      drawBrush();
+      drawModel();
+      drawCreep();
+      drawStressStrain();
+
+      requestAnimationFrame(animate);
+    }
+
+    // Start
+    resizeAll();
+    requestAnimationFrame(animate);
+  </script>
+</body>
+</html>
